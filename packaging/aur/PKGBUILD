@@ -1,0 +1,42 @@
+# Maintainer: noble6
+pkgname=ember-radeon
+pkgver=1.2.2
+pkgrel=1
+pkgdesc="AMD Radeon GPU control center for Linux: tuning, fan curves, undervolting, FSR 4, Anti-Lag, FreeSync (Adrenalin-style)"
+arch=('any')
+url="https://github.com/noble6/ember-radeon"
+license=('GPL-3.0-or-later')
+depends=('python' 'pyside6' 'systemd' 'hwdata')
+optdepends=('mangohud: FPS cap and performance overlay'
+            'vkbasalt: CAS sharpening and SMAA/FXAA'
+            'gamescope: Super Resolution, VSR and integer scaling'
+            'gpu-screen-recorder: recording, Instant Replay and screenshots'
+            'proton-cachyos: automatic FSR 4 upgrade'
+            'libkscreen: display settings (FreeSync, HDR) on KDE Plasma'
+            'vulkan-tools: driver info'
+            'mesa-utils: driver info')
+install=ember-radeon.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  local lib="$pkgdir/usr/lib/ember"
+  install -d "$lib" "$lib/bin"
+  cp -r ember qml fonts icons packaging "$lib/"
+  install -m755 main.py emberd.py "$lib/"
+  install -m755 bin/ember-run "$lib/bin/ember-run"
+  install -m755 packaging/ember-overdrive "$lib/ember-overdrive"
+  find "$lib" -name __pycache__ -prune -exec rm -rf {} +
+
+  install -d "$pkgdir/usr/bin"
+  printf '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/ember/main.py "$@"\n' > "$pkgdir/usr/bin/ember"
+  chmod 755 "$pkgdir/usr/bin/ember"
+  ln -s /usr/lib/ember/bin/ember-run "$pkgdir/usr/bin/ember-run"
+
+  sed 's|/usr/local/lib/ember|/usr/lib/ember|' packaging/emberd.service | install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/emberd.service"
+  install -Dm644 packaging/ember.desktop "$pkgdir/usr/share/applications/ember.desktop"
+  install -Dm644 icons/ember.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/ember.svg"
+  install -Dm644 packaging/io.github.noble6.Ember.metainfo.xml "$pkgdir/usr/share/metainfo/io.github.noble6.Ember.metainfo.xml"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

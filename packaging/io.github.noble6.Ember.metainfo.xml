@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.noble6.Ember</id>
+  <name>Ember</name>
+  <summary>AMD Radeon control center: tuning, fan curves, FSR 4, FreeSync</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.noble6"><name>noble6</name></developer>
+  <description>
+    <p>Ember is an Adrenalin-style GPU control center for AMD Radeon graphics on Linux.
+    Monitor clocks, temperatures and power; overclock and undervolt; draw fan curves; switch
+    profiles automatically per game; record gameplay and save Instant Replays with hotkeys; and enable FSR 4, Anti-Lag, sharpening, Super Resolution,
+    FreeSync and HDR from one place.</p>
+    <p>Supports RDNA 4, RDNA 3, RDNA 2, RDNA 1, Vega, Polaris and Ryzen APUs on the amdgpu driver.</p>
+  </description>
+  <launchable type="desktop-id">ember.desktop</launchable>
+  <url type="homepage">https://github.com/noble6/ember-radeon</url>
+  <url type="bugtracker">https://github.com/noble6/ember-radeon/issues</url>
+  <screenshots>
+    <screenshot type="default"><image>https://raw.githubusercontent.com/noble6/ember-radeon/main/docs/screenshots/home.png</image></screenshot>
+    <screenshot><image>https://raw.githubusercontent.com/noble6/ember-radeon/main/docs/screenshots/tuning.png</image></screenshot>
+    <screenshot><image>https://raw.githubusercontent.com/noble6/ember-radeon/main/docs/screenshots/display.png</image></screenshot>
+  </screenshots>
+  <categories><category>System</category><category>Settings</category><category>HardwareSettings</category></categories>
+  <keywords><keyword>amd</keyword><keyword>radeon</keyword><keyword>gpu</keyword><keyword>overclock</keyword><keyword>undervolt</keyword><keyword>fan</keyword><keyword>fsr</keyword><keyword>freesync</keyword><keyword>recording</keyword><keyword>instant replay</keyword></keywords>
+  <content_rating type="oars-1.1"/>
+  <releases><release version="1.2.2" date="2026-11-08"/><release version="1.2.1" date="2026-11-08"/><release version="1.2.0" date="2026-11-08"/><release version="1.1.0" date="2026-11-08"/><release version="1.0.0" date="2026-11-08"/></releases>
+</component>

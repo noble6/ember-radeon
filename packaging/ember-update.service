@@ -1,0 +1,18 @@
+[Unit]
+Description=Ember update check and install
+Documentation=https://github.com/noble6/ember-radeon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The timer passes --auto (respects the "install updates automatically" switch);
+# "Update now" in the app starts this unit through ember-update-now.service.
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ember/ember-update.py --auto
+CacheDirectory=ember
+StateDirectory=ember
+PrivateTmp=yes
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+TimeoutStartSec=15min

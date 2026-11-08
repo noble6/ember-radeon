@@ -1,0 +1,31 @@
+name: Bug report
+description: Something doesn't work
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: "What happened?"
+      description: "What did you do, what did you expect, and what happened instead?"
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: System report
+      description: "Paste the output of System → Copy report"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: od
+    attributes:
+      label: Overdrive table (if tuning-related)
+      description: "Output of: cat /sys/class/drm/card*/device/pp_od_clk_voltage"
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Service log
+      description: "Output of: journalctl -u emberd -b --no-pager | tail -50"
+      render: text

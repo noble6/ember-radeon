@@ -1,0 +1,16 @@
+[Unit]
+Description=Ember update (requested from the app)
+Documentation=https://github.com/noble6/ember-radeon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ember/ember-update.py
+CacheDirectory=ember
+StateDirectory=ember
+PrivateTmp=yes
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+TimeoutStartSec=15min

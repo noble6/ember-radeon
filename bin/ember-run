@@ -1,0 +1,88 @@
+#!/usr/bin/python3 -I
+"""ember-run: apply Ember's per-game graphics options, then exec the game.
+
+Steam:   set the game's launch options to   ember-run %command%
+Others:  ember-run --id exe:mygame -- /path/to/game
+"""
+import os
+import sys
+
+for p in (os.environ.get("EMBER_LIB"), os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."),
+          "/usr/local/lib/ember", "/usr/lib/ember"):
+    if p and os.path.isfile(os.path.join(p, "ember", "core", "games.py")):
+        sys.path.insert(0, p)
+        break
+
+argv = sys.argv[1:]
+game_id = None
+if argv[:1] == ["--id"] and len(argv) >= 2:
+    game_id, argv = argv[1], argv[2:]
+if argv[:1] == ["--"]:
+    argv = argv[1:]
+if not argv:
+    sys.exit("usage: ember-run [--id steam:APPID|exe:NAME] [--] command...")
+
+if game_id is None:
+    appid = os.environ.get("SteamAppId") or os.environ.get("SteamGameId")
+    if appid and appid.isdigit() and appid != "0":
+        game_id = f"steam:{appid}"
+
+try:
+    from ember.core import games
+    cfg = games.load_games_config()
+    gfx = games.graphics_for(cfg, game_id)
+    arch = None
+    if gfx.get("mlfg"):
+        from ember.core import gpu
+        gs = gpu.find_gpus()
+        arch = gpu.arch_key(gpu.architecture(gs[0].dev, [])) if gs else None
+    # Which tuning profile will the service switch to for this game? (read-only query, best effort)
+    profile, name = None, None
+    try:
+        import json, socket
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(0.5)
+        s.connect(os.environ.get("EMBER_SOCKET", "/run/ember/emberd.sock"))
+        s.sendall(b'{"cmd":"state"}\n')
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        st = json.loads(buf)["state"]["gpus"]
+        for g in st.values():
+            for r in g.get("rules", []):
+                if r.get("match") == game_id:
+                    profile, name = r.get("profile"), r.get("label")
+            profile = profile or g.get("active") or "Stock"
+            break
+    except Exception:
+        pass
+    if not name and game_id and game_id.startswith("exe:"):
+        name = next((c.get("name") for c in cfg.get("custom", []) if f"exe:{c.get('exe')}" == game_id), None)
+    if not name and game_id and game_id.startswith("steam:"):
+        try:
+            name = next((g["name"] for g in games.scan_steam() if g["id"] == game_id), None)
+        except Exception:
+            name = None
+    banner = games.banner_lines(name, gfx, profile)
+    env, argv = games.build_launch(gfx, argv, tag=game_id or "default", arch=arch, banner=banner)
+    os.environ.pop("MANGOHUD_CONFIG", None)   # would override our config file
+    os.environ.update(env)
+    hud = env.get("MANGOHUD_CONFIGFILE")
+    if hud and gfx.get("banner", True) and os.fork() == 0:
+        # Detached helper: hide the banner after a few seconds, then exit.
+        try:
+            os.setsid()
+            import time
+            time.sleep(float(os.environ.get("EMBER_BANNER_SECONDS", "6")))
+            games.finalize_hud(hud)
+        finally:
+            os._exit(0)
+    if os.environ.get("EMBER_DEBUG"):
+        print(f"ember-run: {game_id}: {env} -> {argv}", file=sys.stderr)
+except Exception as e:  # never stop a game from launching because of us
+    print(f"ember-run: options not applied: {e}", file=sys.stderr)
+
+os.execvp(argv[0], argv)

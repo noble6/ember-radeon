@@ -1,0 +1,27 @@
+[Unit]
+Description=Ember GPU control service (AMD Radeon tuning)
+Documentation=https://github.com/noble6/ember-radeon
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ember/emberd.py
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=ember
+StateDirectory=ember
+# It needs to write /sys; everything else is locked down.
+ProtectSystem=strict
+ReadWritePaths=/sys /var/lib/ember /run/ember
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+
+[Install]
+WantedBy=multi-user.target

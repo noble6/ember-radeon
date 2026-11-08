@@ -1,0 +1,10 @@
+// Let members of the groups allowed to use Ember start an update from the app
+// without a password. Only this one unit, only "start".
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "ember-update-now.service" &&
+        action.lookup("verb") == "start" &&
+        subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});

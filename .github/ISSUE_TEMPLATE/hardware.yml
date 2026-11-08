@@ -1,0 +1,36 @@
+name: Hardware report
+description: Tell us how Ember works on your GPU (very welcome!)
+labels: [hardware]
+body:
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: "e.g. RX 7800 XT (RDNA 3)"
+    validations:
+      required: true
+  - type: dropdown
+    id: works
+    attributes:
+      label: "What works?"
+      multiple: true
+      options:
+        - Monitoring
+        - Profiles
+        - Power limit
+        - Fan curve
+        - Overclock
+        - Undervolt
+        - Per-game profiles
+        - FSR 4
+        - Display page
+  - type: textarea
+    id: report
+    attributes:
+      label: "System report (System → Copy report)"
+      render: text
+  - type: textarea
+    id: od
+    attributes:
+      label: "Output of: cat /sys/class/drm/card*/device/pp_od_clk_voltage"
+      render: text

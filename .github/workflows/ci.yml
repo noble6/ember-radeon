@@ -1,0 +1,17 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { python: ["3.10", "3.12", "3.13"] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - name: Compile check
+        run: python -m py_compile main.py emberd.py bin/ember-run ember/*.py ember/*/*.py tests/*.py
+      - name: "Unit tests (fake sysfs: RDNA 1-4, Polaris, APU)"
+        run: python -m unittest discover -v tests
+      - name: Shell scripts
+        run: bash -n install.sh && bash -n packaging/ember-overdrive

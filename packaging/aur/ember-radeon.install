@@ -1,0 +1,12 @@
+post_install() {
+  systemctl daemon-reload
+  echo ">>> Start the Ember service:  sudo systemctl enable --now emberd"
+  echo ">>> Members of 'wheel' may change GPU settings (edit /etc/ember/emberd.conf to change that)."
+}
+post_upgrade() {
+  systemctl daemon-reload
+  systemctl try-restart emberd.service
+}
+pre_remove() {
+  systemctl disable --now emberd.service 2>/dev/null || true
+}

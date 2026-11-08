@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Ember
+GenericName=GPU Control Center
+Comment=Tune, monitor and game-optimize AMD Radeon graphics
+Exec=ember
+Icon=ember
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=amd;radeon;gpu;overclock;undervolt;fan;adrenalin;
+StartupWMClass=ember

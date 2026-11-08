@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Ember - an open GPU control center for AMD Radeon on Linux."""
+from __future__ import annotations
+
+import os
+import signal
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
+
+from PySide6.QtCore import QTimer, QUrl  # noqa: E402
+from PySide6.QtGui import QFont, QFontDatabase, QIcon, QSurfaceFormat, QGuiApplication  # noqa: E402
+from PySide6.QtNetwork import QLocalServer, QLocalSocket  # noqa: E402
+from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+from PySide6.QtQuick import QQuickWindow  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon  # noqa: E402
+
+from ember.app.backend import Backend  # noqa: E402
+
+APP_ID = f"ember-{os.getuid()}"
+PAGES = ["home", "metrics", "tuning", "gaming", "record", "display", "system", "settings"]
+
+
+REC_ACTIONS = ("toggle-recording", "save-replay", "toggle-replay", "screenshot")
+
+
+def already_running(msg: bytes = b"show") -> bool:
+    sock = QLocalSocket()
+    sock.connectToServer(APP_ID)
+    if sock.waitForConnected(300):
+        sock.write(msg)
+        sock.waitForBytesWritten(300)
+        return True
+    return False
+
+
+def main() -> int:
+    hidden = "--hidden" in sys.argv
+    if "--rec" in sys.argv:
+        # `ember --rec save-replay` etc.: for custom shortcuts on desktops other than KDE.
+        i = sys.argv.index("--rec")
+        action = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        if action not in REC_ACTIONS:
+            print("usage: ember --rec " + "|".join(REC_ACTIONS), file=sys.stderr)
+            return 2
+        from PySide6.QtCore import QCoreApplication
+        QCoreApplication(sys.argv)
+        if not already_running(f"rec:{action}".encode()):
+            print("Ember is not running", file=sys.stderr)
+            return 1
+        return 0
+    shot_dir = os.environ.get("EMBER_SCREENSHOT")
+    QGuiApplication.setDesktopFileName("ember")
+    fmt = QSurfaceFormat.defaultFormat()
+    fmt.setSamples(4)
+    fmt.setStencilBufferSize(8)
+    QSurfaceFormat.setDefaultFormat(fmt)
+    app = QApplication(sys.argv)
+    app.setApplicationName("Ember")
+    app.setOrganizationName("Ember")
+    app.setWindowIcon(QIcon(str(HERE / "icons" / "ember.svg")))
+    app.setQuitOnLastWindowClosed(False)
+
+    if not shot_dir and already_running():
+        return 0
+    server = QLocalServer()
+    QLocalServer.removeServer(APP_ID)
+    server.listen(APP_ID)
+
+    fid = QFontDatabase.addApplicationFont(str(HERE / "fonts" / "RobotoFlex.ttf"))
+    family = QFontDatabase.applicationFontFamilies(fid)[0] if fid >= 0 else "sans-serif"
+    font = QFont(family, 10)
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    app.setFont(font)
+    QQuickWindow.setTextRenderType(QQuickWindow.TextRenderType.CurveTextRendering)
+
+    backend = Backend()
+    engine = QQmlApplicationEngine()
+    engine.warnings.connect(lambda ws: [print("qml:", w.toString(), file=sys.stderr) for w in ws])
+    engine.rootContext().setContextProperty("ember", backend)
+    engine.rootContext().setContextProperty("fontFamily", family)
+    engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Main.qml")))
+    if not engine.rootObjects():
+        backend.shutdown()
+        return 1
+    win = engine.rootObjects()[0]
+
+    def show():
+        win.show()
+        win.raise_()
+        win.requestActivate()
+
+    def on_conn():
+        c = server.nextPendingConnection()
+
+        def read():
+            msg = bytes(c.readAll()).decode(errors="replace").strip()
+            if msg.startswith("rec:"):
+                backend.recAction(msg[4:])
+            else:
+                show()
+        c.readyRead.connect(read)
+    server.newConnection.connect(on_conn)
+
+    tray = None
+    if QSystemTrayIcon.isSystemTrayAvailable() and not shot_dir:
+        tray = QSystemTrayIcon(app.windowIcon())
+        tray.setToolTip("Ember")
+        menu = QMenu()
+        menu.addAction("Open Ember", show)
+        prof_menu = menu.addMenu("Profile")
+        rec_menu = menu.addMenu("Record")
+        a_rec = rec_menu.addAction("Start recording", lambda: backend.recAction("toggle-recording"))
+        a_replay = rec_menu.addAction("Turn Instant Replay on", lambda: backend.recAction("toggle-replay"))
+        a_save = rec_menu.addAction("Save Instant Replay", lambda: backend.recAction("save-replay"))
+        rec_menu.addAction("Take screenshot", lambda: backend.recAction("screenshot"))
+
+        def sync_rec():
+            st = backend.recState
+            a_rec.setText("Stop recording" if st.get("recording") else "Start recording")
+            a_replay.setText("Turn Instant Replay off" if st.get("mode") == "replay" else "Turn Instant Replay on")
+            a_save.setEnabled(st.get("mode") == "replay")
+            rec_menu.setEnabled(bool(backend.recCaps.get("available")))
+        backend.recChanged.connect(sync_rec)
+        sync_rec()
+        backend.recEvent.connect(lambda title, body: tray.showMessage(
+            title, os.path.basename(body) if body.startswith("/") else body, app.windowIcon(), 5000))
+
+        def rebuild():
+            prof_menu.clear()
+            active = backend.runtime.get("applied")
+            for n in ["Stock"] + list((backend.gpuState.get("profiles") or {}).keys()):
+                a = prof_menu.addAction(n)
+                a.setCheckable(True)
+                a.setChecked((n == "Stock" and not active) or n == active)
+                a.setEnabled(bool(backend.daemon.get("authorized")))
+                a.triggered.connect(lambda _=False, n=n: backend.activateProfile("" if n == "Stock" else n))
+        menu.addSeparator()
+        menu.addAction("Quit", app.quit)
+        backend.daemonChanged.connect(rebuild)
+        backend.tick.connect(lambda: tray.setToolTip(
+            f"Ember · {backend.runtime.get('applied') or 'Stock'} · "
+            f"{(backend.snap.get('temp_junction') or 0):.0f}°C · {(backend.snap.get('power_w') or 0):.0f} W"))
+        rebuild()
+        backend.gameStarted.connect(lambda title, body: tray.showMessage(
+            title, body, app.windowIcon(), 6000) if backend.settings.get("notify_games", True) else None)
+        tray.setContextMenu(menu)
+        tray.activated.connect(lambda r: show() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
+        tray.show()
+    win.setProperty("closeToTray", tray is not None and bool(backend.settings.get("close_to_tray", True)))
+    backend.settingsChanged.connect(
+        lambda: win.setProperty("closeToTray", tray is not None and bool(backend.settings.get("close_to_tray", True))))
+
+    if not hidden or tray is None:
+        show()
+
+    def restart_into_update(forced=False):
+        """After a background update, quietly restart into the new version while the
+        window is hidden and nothing is being recorded (or right away when asked)."""
+        if shot_dir or not backend.restartPending or backend.recState.get("mode"):
+            return
+        if win.isVisible() and not forced:
+            return
+        target = Path("/usr/local/lib/ember/main.py")
+        if not target.exists():
+            return
+        backend.shutdown()
+        server.close()
+        QLocalServer.removeServer(APP_ID)
+        os.execv(sys.executable, [sys.executable, str(target)] + ([] if forced else ["--hidden"]))
+    backend.restartRequested.connect(lambda: restart_into_update(forced=True))
+    restart_timer = QTimer(interval=60000, timeout=restart_into_update)
+    restart_timer.start()
+
+    app.aboutToQuit.connect(backend.shutdown)
+    signal.signal(signal.SIGINT, lambda *_: app.quit())
+    signal.signal(signal.SIGTERM, lambda *_: app.quit())
+    keepalive = QTimer(interval=250, timeout=lambda: None)
+    keepalive.start()
+
+    if shot_dir:
+        Path(shot_dir).mkdir(parents=True, exist_ok=True)
+        if os.environ.get("EMBER_SCREENSHOT_HEIGHT"):
+            win.setHeight(int(os.environ["EMBER_SCREENSHOT_HEIGHT"]))
+        only = os.environ.get("EMBER_SCREENSHOT_PAGES")
+        order = [PAGES.index(p) for p in only.split(",")] if only else list(range(len(PAGES)))
+
+        def snap(i=0):
+            if i >= len(order):
+                app.quit()
+                return
+            win.setProperty("page", order[i])
+            QTimer.singleShot(1600, lambda: (win.grabWindow().save(f"{shot_dir}/{order[i]}_{PAGES[order[i]]}.png"),
+                                             snap(i + 1)))
+        QTimer.singleShot(int(os.environ.get("EMBER_SCREENSHOT_DELAY", "3500")), snap)
+
+    rc = app.exec()
+    del win
+    del engine
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
