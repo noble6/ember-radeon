@@ -41,6 +41,7 @@ What the Windows Radeon software does, and what Ember uses on Linux to do the sa
 | Radeon Boost (dynamic resolution) | - | no open implementation | No |
 | "AMD Software active" in-game toast | "EMBER ACTIVE · game" banner with profile and features for the first seconds, then hidden | MangoHud `custom_text_center`, swapped out by rewriting its config in place (inotify reload) | games launched with `ember-run` |
 | Game detection | Now Playing card, "Playing" badge, desktop notification | `SteamLaunch AppId=` in `/proc` | every Steam game, launch options not required |
+| Add games from outside Steam | "Add game" picker of installed apps (Flatpak, Lutris, Heroic, Bottles, native) with icons, plus "Create launcher" | `.desktop` entries in the XDG data dirs; Flatpak `command=` from app metadata | Yes; launchers that hide the game process ask for it once |
 | HYPR-RX one-click | Per-game "Use global settings" + profiles | | equivalent workflow |
 
 ## Display

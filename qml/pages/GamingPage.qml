@@ -31,26 +31,127 @@ Flickable {
             Row {
                 anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
-                Btn { text: "Add game"; icon: "add"; variant: "tonal"; onClicked: { page.adding = !page.adding; exeBox.forceActiveFocus() } }
+                Btn { text: "Add game"; icon: "add"; variant: "tonal"
+                      onClicked: { page.adding = !page.adding; if (page.adding) { ember.loadApps(); searchBox.forceActiveFocus() } } }
                 Btn { text: "Rescan"; icon: "refresh"; variant: "outlined"; onClicked: ember.refreshGames() }
             }
         }
 
         Card {
+            id: picker
             visible: page.adding
-            width: parent.width; height: 88
-            Row {
-                anchors.verticalCenter: parent.verticalCenter; x: 24
-                spacing: 12
-                TextBox { id: nameBox; width: 260; placeholder: "Name (e.g. Elden Ring via Lutris)" }
-                TextBox { id: exeBox; width: 260; placeholder: "Process name (e.g. eldenring.exe)"; onAccepted: addBtn.clicked() }
-                Btn { id: addBtn; text: "Add"; size: 48
-                      onClicked: { ember.addCustomGame(nameBox.text, exeBox.text); page.selId = "exe:" + exeBox.text.trim().split("/").pop()
-                                   nameBox.text = ""; exeBox.text = ""; page.adding = false } }
-                Label { anchors.verticalCenter: parent.verticalCenter; width: 380; wrapMode: Text.WordWrap
-                        role: "bodyS"; color: Theme.inkVariant
-                        text: "For Lutris / Heroic / native games: Ember switches profiles when this process runs. Launch with <b>ember-run --id exe:NAME -- command</b> for graphics features."
-                        textFormat: Text.StyledText }
+            width: parent.width; height: pk.height + 40
+            property string query: ""
+            property bool allApps: false
+            property bool manual: false
+            property var pending: null          // app whose process name we still need
+            readonly property var shown: {
+                var q = query.toLowerCase(), out = []
+                var list = ember.installedApps || []
+                for (var i = 0; i < list.length; i++) {
+                    var a = list[i]
+                    if (!allApps && !a.game && !a.added) continue
+                    if (q && a.name.toLowerCase().indexOf(q) < 0 && a.process.toLowerCase().indexOf(q) < 0) continue
+                    out.push(a)
+                }
+                return out
+            }
+            function choose(a) {
+                if (a.added) { page.selId = a.steam ? "steam:" + a.steam : (a.ember_id || "exe:" + a.process); return }
+                if (!a.process && !a.steam) { pending = a; procBox.text = ""; procBox.forceActiveFocus(); return }
+                var id = ember.addAppGame(a.desktop, "")
+                if (id) { page.selId = id; page.adding = false }
+            }
+            Column {
+                id: pk
+                x: 24; y: 20; width: parent.width - 48
+                spacing: 14
+                Item {
+                    width: parent.width; height: 48
+                    Row {
+                        spacing: 8; anchors.verticalCenter: parent.verticalCenter
+                        TextBox { id: searchBox; width: 280; placeholder: "Search installed apps"
+                                  onTextChanged: picker.query = text }
+                        Chip { text: "Games"; selected: !picker.allApps && !picker.manual; anchors.verticalCenter: parent.verticalCenter
+                               onClicked: { picker.allApps = false; picker.manual = false } }
+                        Chip { text: "All apps"; selected: picker.allApps && !picker.manual; anchors.verticalCenter: parent.verticalCenter
+                               onClicked: { picker.allApps = true; picker.manual = false } }
+                        Chip { text: "Enter manually"; selected: picker.manual; anchors.verticalCenter: parent.verticalCenter
+                               onClicked: { picker.manual = true; nameBox.forceActiveFocus() } }
+                    }
+                    Btn { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                          text: "Refresh"; icon: "refresh"; variant: "text"; onClicked: ember.loadApps() }
+                }
+
+                // process name prompt for launchers whose real game process can't be read from the shortcut
+                Rectangle {
+                    visible: !!picker.pending && !picker.manual
+                    width: parent.width; height: 72; radius: 16; color: Theme.surfaceContainerHighest
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter; x: 16; spacing: 12
+                        Label { anchors.verticalCenter: parent.verticalCenter; width: 300; wrapMode: Text.WordWrap; role: "bodyS"
+                                textFormat: Text.StyledText
+                                text: picker.pending ? "<b>" + picker.pending.name + "</b> starts through a launcher. Which process is the game?" : "" }
+                        TextBox { id: procBox; width: 240; placeholder: "e.g. eldenring.exe"; onAccepted: procAdd.clicked() }
+                        Btn { id: procAdd; text: "Add"; anchors.verticalCenter: parent.verticalCenter
+                              onClicked: { var id = ember.addAppGame(picker.pending.desktop, procBox.text)
+                                           if (id) { page.selId = id; picker.pending = null; page.adding = false } } }
+                        Btn { text: "Cancel"; variant: "text"; anchors.verticalCenter: parent.verticalCenter; onClicked: picker.pending = null }
+                    }
+                }
+
+                Flickable {
+                    visible: !picker.manual
+                    width: parent.width; height: Math.min(appFlow.height, 300)
+                    contentHeight: appFlow.height; clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    Flow {
+                        id: appFlow
+                        width: parent.width; spacing: 8
+                        Repeater {
+                            model: picker.shown
+                            delegate: Rectangle {
+                                id: tile
+                                required property var modelData
+                                width: (appFlow.width - 16) / 3; height: 64; radius: 16
+                                color: tm.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+                                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                Image { id: ti; x: 12; anchors.verticalCenter: parent.verticalCenter; width: 40; height: 40
+                                        sourceSize.width: 80; sourceSize.height: 80; fillMode: Image.PreserveAspectFit
+                                        asynchronous: true; source: tile.modelData.icon ? "file://" + tile.modelData.icon : ""
+                                        visible: status === Image.Ready }
+                                Icon { visible: ti.status !== Image.Ready; x: 20; anchors.verticalCenter: parent.verticalCenter
+                                       name: "game"; size: 24; color: Theme.primary }
+                                Column {
+                                    x: 64; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 64 - 44
+                                    Label { text: tile.modelData.name; role: "labelL"; emphasized: true; width: parent.width; elide: Text.ElideRight }
+                                    Label { width: parent.width; elide: Text.ElideRight; role: "bodyS"; color: Theme.inkVariant
+                                            text: tile.modelData.steam ? "Steam game" : tile.modelData.launcher ? "Launcher"
+                                                  : tile.modelData.process ? tile.modelData.process : "Process name needed" }
+                                }
+                                Icon { anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
+                                       name: tile.modelData.added ? "check" : "add"; size: 22
+                                       color: tile.modelData.added ? Theme.good : Theme.inkVariant }
+                                MouseArea { id: tm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onClicked: picker.choose(tile.modelData) }
+                            }
+                        }
+                    }
+                }
+                Label { visible: !picker.manual && picker.shown.length === 0; role: "body"; color: Theme.inkVariant
+                        text: (ember.installedApps || []).length ? "Nothing matches. Try “All apps”, or enter the game manually." : "Loading installed apps..." }
+
+                Row {
+                    visible: picker.manual
+                    spacing: 12
+                    TextBox { id: nameBox; width: 260; placeholder: "Name (e.g. Elden Ring via Lutris)" }
+                    TextBox { id: exeBox; width: 260; placeholder: "Process name (e.g. eldenring.exe)"; onAccepted: addBtn.clicked() }
+                    Btn { id: addBtn; text: "Add"; size: 48
+                          onClicked: { ember.addCustomGame(nameBox.text, exeBox.text); page.selId = "exe:" + exeBox.text.trim().split("/").pop()
+                                       nameBox.text = ""; exeBox.text = ""; page.adding = false } }
+                }
+                Label { width: parent.width; wrapMode: Text.WordWrap; role: "bodyS"; color: Theme.inkVariant; textFormat: Text.StyledText
+                        text: "Ember switches tuning profiles whenever the game's process is running, however you start it. For graphics features (FSR, Anti-Lag, overlay), start it through Ember's launcher." }
             }
         }
 
@@ -84,8 +185,11 @@ Flickable {
                     }
                     Column {
                         visible: !cover.modelData.cover
-                        anchors.centerIn: parent; width: parent.width - 24; spacing: 8
-                        Icon { name: "game"; size: 40; color: Theme.primary; anchors.horizontalCenter: parent.horizontalCenter }
+                        anchors.centerIn: parent; width: parent.width - 24; spacing: 12
+                        Image { id: ci; visible: status === Image.Ready; width: 96; height: 96; anchors.horizontalCenter: parent.horizontalCenter
+                                sourceSize.width: 192; sourceSize.height: 192; fillMode: Image.PreserveAspectFit; asynchronous: true
+                                source: cover.modelData.icon ? "file://" + cover.modelData.icon : "" }
+                        Icon { visible: ci.status !== Image.Ready; name: "game"; size: 40; color: Theme.primary; anchors.horizontalCenter: parent.horizontalCenter }
                         Label { text: cover.modelData.name; role: "titleS"; width: parent.width; horizontalAlignment: Text.AlignHCenter
                                 wrapMode: Text.WordWrap; maximumLineCount: 3; elide: Text.ElideRight }
                     }
@@ -139,6 +243,12 @@ Flickable {
                     width: parent.width; height: 220; radius: 28
                     RoundedImage { anchors.fill: parent; radius: 28; opacity: 0.85
                                    source: page.sel && page.sel.hero ? "file://" + page.sel.hero : "" }
+                    Image { visible: !!(page.sel && !page.sel.hero && page.sel.icon)
+                            source: page.sel && page.sel.icon ? "file://" + page.sel.icon : ""
+                            anchors.right: parent.right; anchors.rightMargin: 32; anchors.verticalCenter: parent.verticalCenter
+                            anchors.verticalCenterOffset: -16
+                            width: 120; height: 120; sourceSize.width: 240; sourceSize.height: 240
+                            fillMode: Image.PreserveAspectFit; asynchronous: true }
                     Rectangle { anchors.fill: parent; radius: 28
                                 gradient: Gradient { GradientStop { position: 0.3; color: "transparent" }
                                                      GradientStop { position: 1.0; color: Theme.alpha("#000000", 0.75) } } }
@@ -187,7 +297,11 @@ Flickable {
                                 text: page.sel && page.sel.source === "Steam"
                                       ? (page.sel.wired ? "Graphics features are active: launch options contain <b>ember-run</b>."
                                                         : "Graphics features need <b>ember-run %command%</b> in this game’s launch options. Ember can add it (close Steam first) or you can paste it.")
-                                      : "Start it with: <b>ember-run --id " + (page.sel ? page.sel.id : "") + " -- &lt;command&gt;</b>" }
+                                      : (page.sel && page.sel.launcher_file
+                                         ? "Graphics features are active when you start it from the <b>" + page.sel.name + " (Ember)</b> menu entry."
+                                         : "Profiles switch automatically. For graphics features, start it with <b>ember-run --id " + (page.sel ? page.sel.id : "") + " -- "
+                                           + (page.sel && page.sel.launch ? "</b>its command<b>" : "&lt;command&gt;") + "</b>"
+                                           + (page.sel && page.sel.launch ? ", or let Ember create a menu entry that does it." : "")) }
                         Rectangle {
                             visible: !!(page.sel && page.sel.launch_options)
                             width: parent.width; height: 40; radius: 12; color: Theme.surfaceContainerHighest
@@ -200,9 +314,13 @@ Flickable {
                                   text: page.sel && page.sel.wired ? "Remove from Steam" : "Add to Steam"
                                   icon: "link"; variant: page.sel && page.sel.wired ? "outlined" : "filled"
                                   onClicked: ember.wireSteam(page.sel.appid, !page.sel.wired) }
+                            Btn { visible: !!(page.sel && page.sel.source === "Other" && page.sel.launch)
+                                  text: page.sel && page.sel.launcher_file ? "Remove launcher" : "Create launcher"
+                                  icon: "rocket"; variant: page.sel && page.sel.launcher_file ? "outlined" : "filled"
+                                  onClicked: ember.setGameLauncher(page.sel.exe, !page.sel.launcher_file) }
                             Btn { text: "Copy"; icon: "copy"; variant: "text"
                                   onClicked: ember.copy(page.sel.source === "Steam" ? "ember-run %command%"
-                                                        : "ember-run --id " + page.sel.id + " -- ") }
+                                                        : "ember-run --id " + page.sel.id + " -- " + (page.sel.launch || "")) }
                             Btn { visible: !!(page.sel && page.sel.source === "Other"); text: "Remove game"; icon: "delete"; variant: "text"
                                   onClicked: { ember.removeCustomGame(page.sel.exe); page.selId = "" } }
                         }

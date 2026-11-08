@@ -83,7 +83,9 @@ The kernel hides clock and voltage controls unless the overdrive bit is set in `
 
 ### Per-game graphics
 
-Launch a Steam game with `ember-run %command%`; Ember can write that into the game's launch options for you. Anything else works with `ember-run --id exe:NAME -- command`. Automatic tuning-profile switching works with no launch options at all.
+Launch a Steam game with `ember-run %command%`; Ember can write that into the game's launch options for you. Automatic tuning-profile switching works with no launch options at all.
+
+Games outside Steam (Flatpaks like Sober, Lutris, Heroic, Bottles, native games) are added from **Gaming > Add game**, which lists your installed apps with their icons and works out the process to watch for. **Create launcher** then adds a "Game (Ember)" entry to your app menu that starts the game with its Ember graphics settings. By hand, it is `ember-run --id exe:NAME -- command`. Graphics features inside a Flatpak need the Flatpak builds of MangoHud and vkBasalt.
 
 ## Safety
 

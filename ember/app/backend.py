@@ -5,6 +5,7 @@ import copy
 import getpass
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from ember.app import daemon_client as dc
 from ember.app import display
 from ember.app import sysinfo
 from ember import __version__
+from ember.core import apps as APPS
 from ember.core import games as GM
 from ember.core import update as UPD
 from ember.core import gpu as G
@@ -46,6 +48,7 @@ class Backend(QObject):
     daemonChanged = Signal()
     tuningChanged = Signal()
     gamesChanged = Signal()
+    appsChanged = Signal()
     sysChanged = Signal()
     settingsChanged = Signal()
     busyChanged = Signal()
@@ -75,6 +78,7 @@ class Backend(QObject):
         self._tuning: dict = self._gpu.tuning_state() if self._gpu else {}
         self._games: list = []
         self._gcfg = GM.load_games_config()
+        self._apps: list = []
         self._sys: dict = {}
         self._busy = 0
         self._pool = ThreadPoolExecutor(max_workers=2)
@@ -132,6 +136,7 @@ class Backend(QObject):
             QTimer.singleShot(900, self._register_hotkeys)
         QTimer.singleShot(300, self.refreshDisplays)
         QTimer.singleShot(600, self.refreshCaches)
+        QTimer.singleShot(1500, self.loadApps)
 
     # ---------------------------------------------------------------- plumbing
     def _run(self, fn, cb=None, err=None, busy=False):
@@ -903,7 +908,9 @@ class Backend(QObject):
 
     def _custom_entry(self, c: dict) -> dict:
         return {"id": f"exe:{c['exe']}", "name": c.get("name") or c["exe"], "source": "Other",
-                "exe": c["exe"], "wired": True, "launch_options": ""}
+                "exe": c["exe"], "wired": True, "launch_options": "", "icon": c.get("icon") or "",
+                "launch": " ".join(shlex.quote(a) for a in c.get("argv") or []),
+                "launcher_file": APPS.launcher_path(c["exe"]).is_file()}
 
     @Property("QVariant", notify=gamesChanged)
     def globalGraphics(self):
@@ -963,10 +970,84 @@ class Backend(QObject):
         GM.save_games_config(self._gcfg)
         self.gamesChanged.emit()
 
+    # Installed desktop apps, for "Add game" (Flatpak, Lutris/Heroic/Bottles shortcuts, native games)
+    @Property("QVariant", notify=appsChanged)
+    def installedApps(self):
+        have = {g["id"] for g in self._games} | {f"exe:{c['exe']}" for c in self._gcfg.get("custom", [])}
+        out = []
+        for a in self._apps:
+            gid = f"steam:{a['steam']}" if a["steam"] else (a["ember_id"] or (f"exe:{a['process']}" if a["process"] else ""))
+            out.append({**a, "added": bool(gid) and gid in have})
+        return out
+
+    @Slot()
+    def loadApps(self):
+        def ok(apps):
+            self._apps = apps
+            # games added before Ember knew about app icons: borrow the icon from their menu entry
+            icons = {}
+            for a in apps:
+                key = a["ember_id"][4:] if a["ember_id"].startswith("exe:") else a["process"]
+                if key and a["icon"]:
+                    icons.setdefault(key, a["icon"])
+            changed = False
+            for c in self._gcfg.get("custom", []):
+                if not c.get("icon") and icons.get(c["exe"]):
+                    c["icon"] = icons[c["exe"]]
+                    changed = True
+            if changed:
+                GM.save_games_config(self._gcfg)
+                self.gamesChanged.emit()
+            self.appsChanged.emit()
+        self._run(APPS.desktop_apps, ok)
+
+    @Slot(str, str, result=str)
+    def addAppGame(self, desktop, process):
+        """Add an installed app as a game. Returns the game id to select ('' on failure)."""
+        a = next((x for x in self._apps if x["desktop"] == desktop), None)
+        if not a:
+            return ""
+        if a["steam"]:
+            self.toast.emit(f"{a['name']} is a Steam game - it's already in your library")
+            return f"steam:{a['steam']}"
+        exe = os.path.basename((process or a["process"]).strip())
+        if not exe:
+            self.toast.emit("Enter the game's process name")
+            return ""
+        argv = [] if a["ember_id"] else APPS.launch_argv(a["exec"])
+        self._gcfg["custom"] = [c for c in self._gcfg.get("custom", []) if c["exe"] != exe]
+        self._gcfg["custom"].append({"name": a["name"], "exe": exe, "icon": a["icon"], "desktop": desktop,
+                                     "argv": argv})
+        GM.save_games_config(self._gcfg)
+        self.gamesChanged.emit()
+        self.appsChanged.emit()
+        self.toast.emit(f"Added {a['name']}")
+        return f"exe:{exe}"
+
+    @Slot(str, bool)
+    def setGameLauncher(self, exe, enable):
+        c = next((c for c in self._gcfg.get("custom", []) if c["exe"] == exe), None)
+        if not c:
+            return
+        path = APPS.launcher_path(exe)
+        try:
+            if enable:
+                ember_run = shutil.which("ember-run") or str(_install_root() / "bin/ember-run")
+                APPS.write_launcher(c.get("name") or exe, exe, c.get("argv") or [], c.get("icon") or "", ember_run)
+                self.toast.emit(f"Added “{c.get('name') or exe} (Ember)” to your app menu")
+            else:
+                path.unlink(missing_ok=True)
+                self.toast.emit("Launcher removed")
+        except OSError as e:
+            self.toast.emit(f"Couldn't write the launcher: {e}")
+        self.gamesChanged.emit()
+
     @Slot(str)
     def removeCustomGame(self, exe):
+        APPS.launcher_path(exe).unlink(missing_ok=True)
         self._gcfg["custom"] = [c for c in self._gcfg.get("custom", []) if c["exe"] != exe]
         GM.save_games_config(self._gcfg)
+        self.appsChanged.emit()
         self.setGameProfile(f"exe:{exe}", exe, "")
 
     @Slot("QVariant", result=str)
