@@ -73,7 +73,9 @@ Uninstall with `./install.sh --uninstall`.
 
 ### Updates
 
-Ember keeps itself up to date. Once a day a small system timer checks GitHub for a new release, downloads it, checks its Ed25519 signature against the release key built into Ember and installs it. The signing key is not stored on GitHub, so a release that was not signed by the maintainer is refused even if it appears on the releases page. The service restarts on its own, and the app restarts the next time it is sitting in the tray. You can turn this off, check manually, or update right away from **Settings > Updates**. Driver updates (Mesa, the kernel) never need an Ember update: Ember reads what your system provides each time it starts.
+Ember keeps itself up to date. Once a day a small system timer checks GitHub for a new release, downloads it, checks its Ed25519 signature against the release key built into Ember and installs it. The signing key is not stored on GitHub, so a release that was not signed by the maintainer is refused even if it appears on the releases page. The service restarts on its own, and the app restarts the next time it is sitting in the tray. You can turn this off, choose how often Ember checks (daily, weekly or monthly), check manually, or update right away from **Settings > Updates**.
+
+Updates have a fail-safe. A release is test-loaded before it is installed, the version it replaces is kept, and if the service does not come back after the update, or the app cannot start, Ember goes back to the previous version on its own and does not try the broken release again. **Roll back** in Settings does the same by hand. Driver updates (Mesa, the kernel) never need an Ember update: Ember reads what your system provides each time it starts.
 
 Installed from the AUR or another package? Then your package manager handles updates and the built-in updater stays out of the way.
 

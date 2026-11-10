@@ -142,6 +142,77 @@ Flickable {
             }
         }
 
+        // ------------------------------------------------------------ live stream
+        Card {
+            id: live
+            readonly property bool on: page.st.mode === "stream"
+            width: parent.width; height: ls.height + 48
+            enabled: page.ok; opacity: page.ok ? 1 : 0.7
+            color: on ? Theme.alpha(Theme.hot, 0.10) : Theme.surfaceContainer
+            Column {
+                id: ls
+                x: 24; y: 24; width: parent.width - 48
+                spacing: 14
+                Item {
+                    width: parent.width; height: 40
+                    CardTitle { icon: "upload"; text: "Live stream"
+                                sub: live.on ? "On air for " + page.clock(page.st.since) : "Broadcast your screen with the GPU encoder" }
+                    Row {
+                        anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 12
+                        Rectangle {
+                            visible: live.on; anchors.verticalCenter: parent.verticalCenter
+                            height: 28; radius: 14; width: lv.implicitWidth + 34; color: Theme.hot
+                            Rectangle { x: 10; width: 8; height: 8; radius: 4; color: "white"; anchors.verticalCenter: parent.verticalCenter
+                                        SequentialAnimation on opacity { running: live.on && ember.uiVisible; loops: Animation.Infinite
+                                            NumberAnimation { to: 0.2; duration: 600 } NumberAnimation { to: 1; duration: 600 } } }
+                            Label { id: lv; x: 24; anchors.verticalCenter: parent.verticalCenter; text: "LIVE"; role: "labelL"
+                                    emphasized: true; color: "white" }
+                        }
+                        Btn { text: live.on ? "End stream" : "Go live"; icon: live.on ? "stop" : "upload"
+                              variant: live.on ? "outlined" : "filled"
+                              enabled: !page.st.busy && (live.on || !page.st.mode)
+                              onClicked: ember.recAction("toggle-stream") }
+                    }
+                }
+                Row {
+                    spacing: 8
+                    Label { text: "Service"; role: "titleS"; color: Theme.inkVariant; width: 172; anchors.verticalCenter: parent.verticalCenter }
+                    Repeater {
+                        model: ember.streamServices
+                        delegate: Chip { required property var modelData; text: modelData.label
+                                         selected: page.cfg.stream_service === modelData.key; enabled: !live.on
+                                         onClicked: ember.setRecSetting("stream_service", modelData.key) }
+                    }
+                }
+                Row {
+                    visible: page.cfg.stream_service === "custom"
+                    spacing: 8
+                    Label { text: "Server"; role: "titleS"; color: Theme.inkVariant; width: 172; anchors.verticalCenter: parent.verticalCenter }
+                    TextBox { width: 440; placeholder: "rtmp://your.server/app"; text: page.cfg.stream_url || ""; enabled: !live.on
+                              onEdited: ember.setRecSetting("stream_url", text.trim()) }
+                }
+                Row {
+                    spacing: 8
+                    Label { text: "Stream key"; role: "titleS"; color: Theme.inkVariant; width: 172; anchors.verticalCenter: parent.verticalCenter }
+                    TextBox { width: 440; password: true; placeholder: "Paste the key from your channel settings"
+                              text: page.cfg.stream_key || ""; enabled: !live.on
+                              onEdited: ember.setRecSetting("stream_key", text.trim()) }
+                }
+                Row {
+                    spacing: 8
+                    Label { text: "Bitrate"; role: "titleS"; color: Theme.inkVariant; width: 172; anchors.verticalCenter: parent.verticalCenter }
+                    Repeater {
+                        model: [3000, 4500, 6000, 8000, 12000]
+                        delegate: Chip { required property int modelData; text: (modelData / 1000) + " Mbps"
+                                         selected: (page.cfg.stream_kbps || 6000) === modelData; enabled: !live.on
+                                         onClicked: ember.setRecSetting("stream_kbps", modelData) }
+                    }
+                }
+                Label { width: parent.width; wrapMode: Text.WordWrap; role: "bodyS"; color: Theme.inkVariant
+                        text: "Streams in H.264 with your capture, frame rate and audio settings below. The key is stored only on this PC and never shown in messages. Recording and Instant Replay are paused while you are live." }
+            }
+        }
+
         // ------------------------------------------------------------ settings
         Card {
             width: parent.width; height: qs.height + 48

@@ -1,5 +1,5 @@
 [Unit]
-Description=Check for Ember updates daily
+Description=Check for Ember updates (the updater applies the daily, weekly or monthly setting)
 
 [Timer]
 OnBootSec=10min

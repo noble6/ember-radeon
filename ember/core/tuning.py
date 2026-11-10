@@ -182,6 +182,40 @@ def validate(settings: dict, tuning_state: dict) -> dict:
     return out
 
 
+PROFILE_FILE_KIND = "ember-profile"
+PROFILE_FILE_MAX = 64 * 1024
+
+
+def export_profile(name: str, settings: dict, gpu_name: str = "") -> dict:
+    """A profile as a file other people can import."""
+    return {"kind": PROFILE_FILE_KIND, "version": 1, "name": name, "gpu": gpu_name, "settings": settings}
+
+
+def parse_profile_file(text: str, tuning_state: dict) -> tuple[str, dict]:
+    """(name, settings) from an exported profile, clamped to what *this* GPU allows.
+    A profile from another card is not trusted: every value goes through validate()."""
+    import json
+    if len(text) > PROFILE_FILE_MAX:
+        raise InvalidSettings("that file is too large to be a profile")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        raise InvalidSettings("that file is not an Ember profile") from None
+    if not isinstance(data, dict) or data.get("kind") != PROFILE_FILE_KIND or not isinstance(data.get("settings"), dict):
+        raise InvalidSettings("that file is not an Ember profile")
+    name = "".join(ch for ch in str(data.get("name") or "Imported") if ord(ch) >= 32).strip()[:40] or "Imported"
+    settings = dict(data["settings"])
+    if settings.get("power_profile") is not None:
+        valid = {p["index"] for p in tuning_state.get("power_profiles") or []}
+        if settings["power_profile"] not in valid:
+            settings["power_profile"] = None       # workload profiles are numbered per GPU family
+    if settings.get("power_cap_w") is not None and (tuning_state.get("power_cap") or {}).get("min") is None:
+        settings["power_cap_w"] = None
+    if settings.get("od") and not tuning_state.get("od"):
+        settings["od"] = None                       # overdrive is off here: import the rest
+    return name, validate(settings, tuning_state)
+
+
 def fan_target(curve: list, temp: float) -> float:
     """Linear interpolation over the curve (flat beyond its ends)."""
     if not curve:

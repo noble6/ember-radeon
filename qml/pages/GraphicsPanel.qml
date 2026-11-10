@@ -43,6 +43,42 @@ Column {
         }
     }
 
+    // ---------------------------------------------------------------- one-click presets
+    readonly property string preset: ember.graphicsPresetOf(gfx)
+    Group { text: "ONE-CLICK PRESETS"; topPadding: 4 }
+    Row {
+        width: parent.width; spacing: 8
+        opacity: root.locked ? 0.4 : 1
+        Repeater {
+            model: ember.graphicsPresets
+            delegate: Rectangle {
+                id: pt
+                required property var modelData
+                readonly property bool sel: root.preset === modelData.key
+                width: (root.width - 3 * 8) / 4; height: 100
+                radius: sel ? 24 : 16
+                Behavior on radius { NumberAnimation { duration: Theme.medium; easing.type: Easing.OutBack } }
+                color: sel ? Theme.secondaryContainer : Theme.surfaceContainerHigh
+                border.width: 1; border.color: sel ? Theme.alpha(Theme.primary, 0.5) : Theme.alpha(Theme.outlineVariant, 0.6)
+                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                scale: pm.pressed ? 0.98 : 1
+                Behavior on scale { NumberAnimation { duration: Theme.fast } }
+                StateLayer { id: psl; radius: pt.radius; hovered: pm.containsMouse; pressed: pm.pressed }
+                IconBadge { id: pi; x: 12; y: 12; size: 32; icon: pt.sel ? "check" : pt.modelData.icon; round: pt.sel }
+                Label { anchors.left: pi.right; anchors.leftMargin: 10; anchors.verticalCenter: pi.verticalCenter
+                        text: pt.modelData.label; role: "titleS"; emphasized: true
+                        width: parent.width - 66; elide: Text.ElideRight }
+                Label { x: 12; anchors.bottom: parent.bottom; anchors.bottomMargin: 10; width: parent.width - 24
+                        text: pt.modelData.blurb; role: "labelS"; color: Theme.inkVariant; elide: Text.ElideRight
+                        wrapMode: Text.WordWrap; maximumLineCount: 2 }
+                MouseArea { id: pm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            enabled: !root.locked
+                            onPressed: (m) => psl.ripple(m.x, m.y)
+                            onClicked: root.changed(ember.withGraphicsPreset(root.gfx, pt.modelData.key)) }
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- latency
     Group { text: "LATENCY & FRAME PACING" }
     SwitchRow {

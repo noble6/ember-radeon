@@ -88,16 +88,6 @@ Flickable {
                 x: 24; y: 24; width: parent.width - 48
                 spacing: 8
                 CardTitle { icon: "shield"; text: "Ember service"; bottomPadding: 8 }
-                InfoRow {
-                    label: "Last checked"
-                    value: {
-                        var t = up.u.last_checked
-                        if (!t) return "Not yet"
-                        var d = Math.max(0, Date.now() / 1000 - t)
-                        return d < 90 ? "Just now" : d < 3600 ? Math.round(d / 60) + " min ago"
-                             : d < 86400 ? Math.round(d / 3600) + " h ago" : new Date(t * 1000).toLocaleString()
-                    }
-                }
                 InfoRow { label: "Status"; value: ember.daemon.connected ? "Running" : "Not running" }
                 InfoRow { label: "Permission"; value: ember.daemon.connected ? (ember.daemon.authorized ? "Can change settings" : "Read-only") : "—" }
                 InfoRow { label: "Socket"; value: "/run/ember/emberd.sock"; mono: true }
@@ -145,7 +135,8 @@ Flickable {
                     }
                 }
                 InfoRow { label: "Status"
-                          value: up.u.restart_needed ? "Version " + up.u.installed + " installed. Restart to use it"
+                          value: up.u.rolled_back ? "Version " + up.u.rolled_back + " did not work here and was rolled back"
+                               : up.u.restart_needed ? "Version " + up.u.installed + " installed. Restart to use it"
                                : up.u.busy ? (up.u.status === "downloading" ? "Downloading" : up.u.status === "installing" ? "Installing" : "Checking")
                                : up.u.status_error ? "Last update failed: " + up.u.status_error
                                : up.u.available ? "Update available"
@@ -154,14 +145,51 @@ Flickable {
                     visible: up.u.kind === "local"
                     width: parent.width; icon: "download"
                     title: "Install updates automatically"
-                    subtitle: "Checks once a day. Downloads are verified against their published checksum, the service restarts on its own, and the app restarts the next time it’s in the tray."
+                    subtitle: "Every download must carry a valid signature from Ember’s release key before anything is installed. The service restarts on its own, and the app restarts the next time it’s in the tray."
                     checked: !!up.u.auto; enabled: ember.daemon.authorized
                     onToggled: (on) => ember.setAutoUpdate(on)
+                }
+                Item {
+                    visible: up.u.kind === "local"
+                    width: parent.width; height: 56
+                    opacity: ember.daemon.authorized ? 1 : 0.4
+                    IconBadge { id: ivb; icon: "timer"; anchors.verticalCenter: parent.verticalCenter }
+                    Column {
+                        anchors.left: ivb.right; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                        Label { text: "Check for updates"; role: "titleM" }
+                        Label { text: "How often Ember looks for a new release."; role: "bodyS"; color: Theme.inkVariant }
+                    }
+                    Row {
+                        anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 8
+                        Repeater {
+                            model: [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"]]
+                            delegate: Chip { required property var modelData; text: modelData[1]
+                                             selected: (up.u.interval || "daily") === modelData[0]
+                                             enabled: ember.daemon.authorized
+                                             onClicked: ember.setUpdateInterval(modelData[0]) }
+                        }
+                    }
                 }
                 Label {
                     visible: up.u.kind !== "local"; width: parent.width; wrapMode: Text.WordWrap; role: "bodyS"; color: Theme.inkVariant
                     text: up.u.kind === "package" ? "Ember was installed by your package manager, which keeps it up to date."
                                                   : "Running from a source checkout: update with git pull, then run install.sh."
+                }
+                Item {
+                    visible: up.u.kind === "local" && !!up.u.previous && up.u.previous !== up.u.installed
+                    width: parent.width; height: 56
+                    opacity: ember.daemon.authorized ? 1 : 0.4
+                    IconBadge { id: rbb; icon: "reset"; anchors.verticalCenter: parent.verticalCenter }
+                    Column {
+                        anchors.left: rbb.right; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: rbBtn.left; anchors.rightMargin: 16
+                        Label { text: "Previous version kept: " + (up.u.previous || ""); role: "titleM" }
+                        Label { width: parent.width; elide: Text.ElideRight; role: "bodyS"; color: Theme.inkVariant
+                                text: "If an update breaks the service or the app, Ember goes back to it on its own. You can also go back by hand." }
+                    }
+                    Btn { id: rbBtn; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                          text: "Roll back"; icon: "reset"; variant: "outlined"; enabled: ember.daemon.authorized
+                          onClicked: ember.rollbackUpdate() }
                 }
                 Btn { text: "Release notes"; variant: "text"; icon: "link"; onClicked: ember.openUrl(up.u.url) }
             }

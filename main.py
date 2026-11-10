@@ -18,7 +18,11 @@ from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 from PySide6.QtQuick import QQuickWindow  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon  # noqa: E402
 
-from ember.app.backend import Backend  # noqa: E402
+try:
+    from ember.app.backend import Backend  # noqa: E402
+except Exception as _e:   # noqa: BLE001 - a broken update must not leave the user without an app
+    Backend = None
+    _import_error = _e
 
 def _server_name() -> str:
     """Single-instance socket. Lives in the user's private runtime dir when there is one:
@@ -41,6 +45,33 @@ PAGES = ["home", "metrics", "tuning", "gaming", "record", "display", "system", "
 REC_ACTIONS = ("toggle-recording", "save-replay", "toggle-replay", "screenshot")
 
 
+def failsafe(reason: str) -> None:
+    """The app could not start. If that follows an update, and the previous version is still
+    on disk, ask the system to put it back (ember-rollback.service; no password for wheel).
+    Uses only the standard library: whatever broke may be anything of ours."""
+    import json
+    import subprocess
+    try:
+        st = json.loads(Path("/var/lib/ember/update-status.json").read_text())
+    except (OSError, ValueError):
+        return
+    import time
+    if st.get("state") != "updated" or time.time() - float(st.get("time") or 0) > 14 * 86400:
+        return                      # not after an update: an ordinary crash, leave things alone
+    if not Path("/usr/local/lib/ember.prev/install.sh").is_file() or HERE != Path("/usr/local/lib/ember"):
+        return
+    print(f"ember: {reason}; going back to the previous version", file=sys.stderr)
+    try:
+        subprocess.run(["systemctl", "start", "--no-block", "ember-rollback.service"], timeout=30,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["notify-send", "-a", "Ember", "-i", "ember", "Ember update rolled back",
+                        f"Version {st.get('current')} could not start ({reason}). "
+                        "The previous version is being restored; start Ember again in a moment."],
+                       timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def already_running(msg: bytes = b"show") -> bool:
     sock = QLocalSocket()
     sock.connectToServer(APP_ID)
@@ -52,6 +83,9 @@ def already_running(msg: bytes = b"show") -> bool:
 
 
 def main() -> int:
+    if Backend is None:
+        failsafe(f"{type(_import_error).__name__}: {_import_error}")
+        raise _import_error
     hidden = "--hidden" in sys.argv
     if "--rec" in sys.argv:
         # `ember --rec save-replay` etc.: for custom shortcuts on desktops other than KDE.
@@ -100,6 +134,7 @@ def main() -> int:
     engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Main.qml")))
     if not engine.rootObjects():
         backend.shutdown()
+        failsafe("the interface failed to load")
         return 1
     win = engine.rootObjects()[0]
 

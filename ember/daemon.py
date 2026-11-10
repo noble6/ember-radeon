@@ -584,7 +584,18 @@ class Daemon:
                 from ember.core import update as U
                 STATE_DIR.mkdir(parents=True, exist_ok=True)
                 tmp = STATE_DIR / "update.json.tmp"
-                tmp.write_text(json.dumps({"auto": bool(req.get("auto"))}))
+                # Only the keys that were sent change; the other setting keeps its value.
+                cur = U.read_json(STATE_DIR / U.SETTINGS.name, {})
+                cur = cur if isinstance(cur, dict) else {}
+                new = {"auto": bool(cur.get("auto", True)),
+                       "interval": cur.get("interval") if cur.get("interval") in U.INTERVALS else "daily"}
+                if "auto" in req:
+                    new["auto"] = bool(req["auto"])
+                if "interval" in req:
+                    if req["interval"] not in U.INTERVALS:
+                        raise ValueError("interval must be daily, weekly or monthly")
+                    new["interval"] = req["interval"]
+                tmp.write_text(json.dumps(new))
                 os.chmod(tmp, 0o644)
                 os.replace(tmp, STATE_DIR / U.SETTINGS.name)
             elif cmd == "set_boot":
@@ -796,6 +807,16 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 def main() -> int:
     logging.basicConfig(level=os.environ.get("EMBER_LOG", "INFO"),
                         format="%(levelname)s %(message)s", stream=sys.stderr)
+    if "--self-test" in sys.argv[1:]:
+        # Run by the updater against a new release before it is installed: prove that this
+        # code loads and can read this machine's GPUs. Reads only; never writes to hardware.
+        for g in G.find_gpus():
+            st = g.tuning_state()
+            T.validate(copy.deepcopy(T.DEFAULTS), st)
+            T.builtin_presets(st)
+            g.snapshot()
+        print(f"emberd {VERSION} self-test ok")
+        return 0
     if "--release-fans" in sys.argv[1:]:
         # ExecStopPost: runs after the service stopped for any reason, including a crash or SIGKILL.
         recover_fans(G.find_gpus())

@@ -1,9 +1,18 @@
 import QtQuick
+import QtQuick.Dialogs
 import "../components"
 import "Fmt.js" as F
 
 Item {
     id: page
+    property string wantLoad: ""        // an imported profile to open once the service has saved it
+    FileDialog {
+        id: importDialog
+        title: "Import an Ember profile"
+        nameFilters: ["Ember profiles (*.ember-profile.json)", "JSON files (*.json)"]
+        currentFolder: ember.profilesFolder
+        onAccepted: page.wantLoad = ember.importProfile(selectedFile)
+    }
     readonly property var s: ember.snap
     readonly property var t: ember.tuning
     readonly property var st: ember.gpuState
@@ -27,7 +36,11 @@ Item {
         dirty = false
     }
     function edit(fn) { var d = F.clone(draft); fn(d); draft = d; dirty = true }
-    onProfilesChanged: { pickInitial(); if (!dirty) load(editing) }
+    onProfilesChanged: {
+        pickInitial()
+        if (wantLoad && profiles[wantLoad]) { var n = wantLoad; wantLoad = ""; load(n) }
+        else if (!dirty) load(editing)
+    }
     Component.onCompleted: { pickInitial(); load(editing) }
 
     Flickable {
@@ -78,6 +91,10 @@ Item {
                 }
                 Chip { text: "New profile"; icon: "add"; visible: !page.naming; enabled: page.can
                        onClicked: { page.naming = true; nameBox.text = ""; nameBox.forceActiveFocus() } }
+                Chip { text: "Import"; icon: "download"; visible: !page.naming; enabled: page.can
+                       onClicked: importDialog.open() }
+                Chip { text: "Export"; icon: "upload"; visible: !page.naming && page.editing !== ""
+                       onClicked: ember.exportProfile(page.editing) }
                 Row {
                     visible: page.naming
                     spacing: 8

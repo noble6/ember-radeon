@@ -55,6 +55,32 @@ GRAPHICS_DEFAULTS = {
     "gs_sharpness": 2,      # 0 (sharpest) .. 20
     "gs_out_w": 0, "gs_out_h": 0, "gs_refresh": 0,   # filled in from the display at save time
 }
+# One-click presets (Adrenalin's HYPR-RX idea). Each sets only the features it is about and
+# leaves the overlay, HDR and the experimental FSR 3/4 switches as they are.
+_PRESET_BASE = {"antilag": False, "sharpen": 0, "fps_cap": 0, "present_mode": "default", "aa": "off", "aniso": 0,
+                "gamescope": False}
+GRAPHICS_PRESETS = [
+    {"key": "default", "label": "Default", "icon": "reset", "blurb": "The game decides",
+     "set": dict(_PRESET_BASE)},
+    {"key": "quality", "label": "Quality", "icon": "sparkle", "blurb": "Sharper image, 16x filtering",
+     "set": {**_PRESET_BASE, "sharpen": 35, "aniso": 16, "present_mode": "mailbox"}},
+    {"key": "performance", "label": "Performance", "icon": "rocket",
+     "blurb": "Anti-Lag and upscaling",
+     "set": {**_PRESET_BASE, "antilag": True, "gamescope": True, "gs_scale": 77, "gs_filter": "fsr", "gs_sharpness": 2,
+             "sharpen": 20}},
+    {"key": "eco", "label": "Power saver", "icon": "moon", "blurb": "60 FPS cap, cooler, quieter",
+     "set": {**_PRESET_BASE, "fps_cap": 60}},
+]
+
+
+def preset_of(gfx: dict) -> str:
+    """Key of the preset these settings match exactly, or '' for a custom mix."""
+    for p in GRAPHICS_PRESETS:
+        if all(gfx.get(k, GRAPHICS_DEFAULTS.get(k)) == v for k, v in p["set"].items()):
+            return p["key"]
+    return ""
+
+
 GS_FILTERS = ("fsr", "nis", "linear", "nearest", "integer")
 AA_MODES = ("off", "fxaa", "smaa")
 OVERLAYS = {

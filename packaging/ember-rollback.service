@@ -1,0 +1,14 @@
+[Unit]
+Description=Ember: go back to the previous version
+Documentation=https://github.com/noble6/ember-radeon
+
+[Service]
+Type=oneshot
+# Runs the previous version's own installer, so it does not depend on the current
+# (possibly broken) version being able to run anything.
+ExecStart=/bin/bash /usr/local/lib/ember.prev/install.sh --rollback
+StateDirectory=ember
+PrivateTmp=yes
+ProtectHome=yes
+LockPersonality=yes
+TimeoutStartSec=5min

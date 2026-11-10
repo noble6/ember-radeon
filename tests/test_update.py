@@ -28,7 +28,8 @@ def make_tar(files: dict, top="ember-radeon-9.9.9", extra=None) -> bytes:
     return buf.getvalue()
 
 
-GOOD = {"install.sh": "#!/bin/bash\necho installed > \"$MARKER\"\n", "main.py": "",
+GOOD = {"install.sh": "#!/bin/bash\necho installed > \"$MARKER\"\nexit ${INSTALL_RC:-0}\n", "main.py": "",
+        "emberd.py": "import sys\nsys.exit(0)\n", "ember-update.py": "",
         "ember/__init__.py": '__version__ = "9.9.9"\n', "ember/daemon.py": ""}
 
 
@@ -179,7 +180,9 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(U.install_kind(Path("/usr/lib/ember")), "package")
         self.assertEqual(U.install_kind(Path(tempfile.mkdtemp())), "source")
 
-    def _run_updater(self, blob, checksum, current="1.0.0", args=(), auto_setting=None, sig="good"):
+    def _run_updater(self, blob, checksum, current="1.0.0", args=(), auto_setting=None, sig="good",
+                     service=(None, None), skip=None, install_rc=0, prev=None):
+        """service = (version answering before the install, version answering after)."""
         from ember import updater
         d = Path(tempfile.mkdtemp())
         U.STATE_DIR, U.STATUS, U.SETTINGS = d, d / "update-status.json", d / "update.json"
@@ -188,6 +191,19 @@ class UpdateTests(unittest.TestCase):
         updater.CACHE = d / "cache"
         os.environ["EMBER_CURRENT_VERSION"] = current
         os.environ["MARKER"] = str(d / "marker")
+        os.environ["INSTALL_RC"] = str(install_rc)
+        U.SKIP = d / "update-skip.json"
+        if skip:
+            U.SKIP.write_text(json.dumps({"version": skip}))
+        # a previous version whose installer records that it was asked to roll back
+        U.PREVIOUS_LIB = d / "ember.prev"
+        if prev:
+            (U.PREVIOUS_LIB / "ember").mkdir(parents=True)
+            (U.PREVIOUS_LIB / "ember/__init__.py").write_text(f'__version__ = "{prev}"\n')
+            (U.PREVIOUS_LIB / "install.sh").write_text(f'#!/bin/bash\necho "$@" > "{d}/rollback"\n')
+        answers = iter([service[0]])
+        updater.service_version = lambda timeout=2.0: next(answers, service[1])
+        updater.wait_for_service = lambda version, seconds=20.0: service[1] == version
         rel = {"version": "9.9.9", "tag": "v9.9.9", "url": "https://x", "notes": "", "prerelease": False,
                "draft": False, "tarball": "https://x/ember-radeon-9.9.9.tar.gz", "checksum": "https://x/sum",
                "signature": None if sig is None else "https://x/sig"}
@@ -230,6 +246,75 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual((rc, st["state"]), (1, "error"), sig)
             self.assertIn(expect, st["error"])
             self.assertFalse((d / "marker").exists(), sig)          # install.sh never ran
+
+    def test_release_that_cannot_load_is_never_installed(self):
+        for broken, expect in (({"ember/broken.py": "def oops(:\n"}, "compile"),
+                               ({"emberd.py": "import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n"}, "self-test")):
+            blob = make_tar({**GOOD, **broken})
+            rc, st, d = self._run_updater(blob, hashlib.sha256(blob).hexdigest() + "  x\n")
+            self.assertEqual((rc, st["state"]), (1, "error"))
+            self.assertIn(expect, st["error"])
+            self.assertFalse((d / "marker").exists())                # install.sh never ran
+
+    def test_update_that_breaks_the_service_is_rolled_back(self):
+        blob = make_tar(GOOD)
+        good_sum = hashlib.sha256(blob).hexdigest() + "  x\n"
+        # the service answered before the update and does not answer as the new version after it
+        rc, st, d = self._run_updater(blob, good_sum, service=("1.0.0", None), prev="1.0.0")
+        self.assertEqual((rc, st["state"]), (1, "rolled-back"))
+        self.assertEqual((st["current"], st["failed"]), ("1.0.0", "9.9.9"))
+        self.assertEqual((d / "rollback").read_text().strip(), "--rollback")   # the previous version's installer ran
+        self.assertEqual(json.loads(U.SKIP.read_text()), {"version": "9.9.9"})
+        # healthy case: the new version answers
+        rc, st, d = self._run_updater(blob, good_sum, service=("1.0.0", "9.9.9"), prev="1.0.0")
+        self.assertEqual((rc, st["state"]), (0, "updated"))
+        self.assertFalse((d / "rollback").exists())
+        # a machine without a running service (no AMD GPU, service disabled) is not held to that test
+        rc, st, d = self._run_updater(blob, good_sum, service=(None, None), prev="1.0.0")
+        self.assertEqual((rc, st["state"]), (0, "updated"))
+        # the installer itself reports that it restored the previous version
+        rc, st, d = self._run_updater(blob, good_sum, install_rc=3)
+        self.assertEqual((rc, st["state"]), (1, "rolled-back"))
+        self.assertEqual(json.loads(U.SKIP.read_text()), {"version": "9.9.9"})
+
+    def test_rolled_back_version_is_not_retried_automatically(self):
+        blob = make_tar(GOOD)
+        good_sum = hashlib.sha256(blob).hexdigest() + "  x\n"
+        rc, st, d = self._run_updater(blob, good_sum, args=("--auto",), skip="9.9.9")
+        self.assertEqual((rc, st["state"]), (0, "skipped"))
+        self.assertFalse((d / "marker").exists())
+        rc, st, d = self._run_updater(blob, good_sum, skip="9.9.9")      # "Update now" tries again
+        self.assertEqual((rc, st["state"]), (0, "updated"))
+        self.assertFalse(U.SKIP.exists())
+        rc, st, d = self._run_updater(blob, good_sum, args=("--auto",), skip="9.9.8")   # an older skip does not block
+        self.assertEqual(st["state"], "updated")
+
+    def test_check_interval(self):
+        day = 86400
+        self.assertTrue(U.check_due(None, every="monthly"))
+        self.assertTrue(U.check_due(1000.0, now=1000.0 + 60, every="daily"))
+        self.assertFalse(U.check_due(1000.0, now=1000.0 + 3 * day, every="weekly"))
+        self.assertTrue(U.check_due(1000.0, now=1000.0 + 7 * day - 3600, every="weekly"))   # jitter slack
+        self.assertFalse(U.check_due(1000.0, now=1000.0 + 20 * day, every="monthly"))
+        self.assertTrue(U.check_due(1000.0, now=1000.0 + 30 * day, every="monthly"))
+        self.assertTrue(U.check_due(5000.0, now=1000.0, every="monthly"))                    # clock went backwards
+        blob = make_tar(GOOD)
+        good_sum = hashlib.sha256(blob).hexdigest() + "  x\n"
+        import time as _t
+        d0 = Path(tempfile.mkdtemp())
+        # a weekly setting with a check two days ago: the timer run does nothing
+        from ember import updater
+        U.STATE_DIR, U.STATUS, U.SETTINGS = d0, d0 / "update-status.json", d0 / "update.json"
+        U.SETTINGS.write_text(json.dumps({"auto": True, "interval": "weekly"}))
+        U.STATUS.write_text(json.dumps({"state": "up-to-date", "time": _t.time() - 2 * day}))
+        called = []
+        orig = U.latest_release
+        U.latest_release = lambda: called.append(1)
+        try:
+            self.assertEqual(updater.run(auto=True, dry_run=False), 0)
+        finally:
+            U.latest_release = orig
+        self.assertEqual(called, [])
 
     def test_up_to_date_and_auto_off(self):
         blob = make_tar(GOOD)

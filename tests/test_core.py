@@ -369,6 +369,35 @@ class CoreTests(unittest.TestCase):
                 break
         self.assertEqual(len(d.state["gpus"][key]["profiles"]), D.MAX_PROFILES)
 
+    def test_update_settings_keep_each_other(self):
+        G, T, D, log = load(self.tmp)
+        d = D.Daemon()
+        key = "0000:03:00.0"
+        f = self.tmp / "state" / "update.json"
+        d.handle({"cmd": "set_update", "gpu": key, "interval": "weekly"}, uid=0)
+        self.assertEqual(json.loads(f.read_text()), {"auto": True, "interval": "weekly"})
+        d.handle({"cmd": "set_update", "gpu": key, "auto": False}, uid=0)
+        self.assertEqual(json.loads(f.read_text()), {"auto": False, "interval": "weekly"})
+        with self.assertRaises(ValueError):
+            d.handle({"cmd": "set_update", "gpu": key, "interval": "hourly"}, uid=0)
+
+    def test_profile_files_are_revalidated_for_this_gpu(self):
+        G, T, D, log = load(self.tmp, overdrive=False)
+        st = D.Daemon().ctl["0000:03:00.0"].state()
+        other_card = T.export_profile("OC\n", {"perf_level": "high", "power_profile": 9, "power_cap_w": 250,
+                                                "od": {"sclk_max": 2900},
+                                                "fan": {"mode": "curve", "curve": [[40, 10], [90, 100]]}}, "RX 7900")
+        name, s = T.parse_profile_file(json.dumps(other_card), st)
+        self.assertEqual(name, "OC")
+        self.assertEqual(s["power_cap_w"], 100.0)            # clamped to this board's limit
+        self.assertIsNone(s["power_profile"])                # index does not exist on this GPU
+        self.assertIsNone(s["od"])                           # overdrive is off here
+        self.assertEqual(s["fan"]["curve"], [[40, 10], [90, 100]])
+        for bad in ("nope", json.dumps({"kind": "x"}), "x" * 70000, json.dumps([1, 2]),
+                    json.dumps({"kind": "ember-profile", "settings": {"perf_level": "rm -rf"}})):
+            with self.assertRaises(T.InvalidSettings):
+                T.parse_profile_file(bad, st)
+
     def test_socket_limits(self):
         G, T, D, log = load(self.tmp)
         d = D.Daemon()

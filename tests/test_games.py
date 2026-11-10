@@ -123,6 +123,18 @@ class GamesTests(unittest.TestCase):
         self.assertTrue(all("\n" not in l and "\x00" not in l for l in lines))
         self.assertIn("custom_text_center=EMBER ACTIVE  ·  Evil exec=rm -rf ~", lines)
 
+    def test_one_click_presets(self):
+        base = dict(GM.GRAPHICS_DEFAULTS)
+        self.assertEqual(GM.preset_of(base), "default")
+        for p in GM.GRAPHICS_PRESETS:
+            self.assertTrue(set(p["set"]) <= set(GM.GRAPHICS_DEFAULTS), p["key"])   # only known options
+            self.assertEqual(GM.preset_of({**base, **p["set"]}), p["key"])
+        mine = {**base, "hdr": True, "overlay": "standard", "fsr4": True}           # a preset leaves these alone
+        perf = next(p for p in GM.GRAPHICS_PRESETS if p["key"] == "performance")
+        after = {**mine, **perf["set"]}
+        self.assertTrue(after["hdr"] and after["fsr4"] and after["overlay"] == "standard" and after["antilag"])
+        self.assertEqual(GM.preset_of({**base, "sharpen": 55}), "")                 # a custom mix matches none
+
     def test_optiscaler_fsr3(self):
         env, _ = GM.build_launch(dict(GM.GRAPHICS_DEFAULTS, optiscaler=True, opti_fg=True, banner=False), ["g"],
                                  have=lambda n: False)

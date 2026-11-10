@@ -16,6 +16,7 @@ What the Windows Radeon software does, and what Ember uses on Linux to do the sa
 | Zero RPM, fan target temperature, acoustic limit | Fan firmware options | `fan_zero_rpm_enable`, `fan_target_temperature`, `acoustic_*_rpm_threshold`, `fan_minimum_pwm` | RDNA 3+ |
 | Memory timing ("Fast Timing") | - | not exposed by amdgpu | No |
 | Auto undervolt / auto overclock | - | needs a stress-test loop | Planned |
+| Share tuning profiles (import / export) | Export to a file, import with every value re-checked against the importing card's limits | JSON profile files | Yes |
 | Apply tuning at startup | Apply at boot + 90 s boot crash guard | systemd service | Yes |
 
 ## Gaming
@@ -42,7 +43,7 @@ What the Windows Radeon software does, and what Ember uses on Linux to do the sa
 | "AMD Software active" in-game toast | "EMBER ACTIVE · game" banner with profile and features for the first seconds, then hidden | MangoHud `custom_text_center`, swapped out by rewriting its config in place (inotify reload) | games launched with `ember-run` |
 | Game detection | Now Playing card, "Playing" badge, desktop notification | `SteamLaunch AppId=` in `/proc` | every Steam game, launch options not required |
 | Add games from outside Steam | "Add game" picker of installed apps (Flatpak, Lutris, Heroic, Bottles, native) with icons, plus "Create launcher" | `.desktop` entries in the XDG data dirs; Flatpak `command=` from app metadata | Yes; launchers that hide the game process ask for it once |
-| HYPR-RX one-click | Per-game "Use global settings" + profiles | | equivalent workflow |
+| HYPR-RX one-click presets | Default / Quality / Performance / Power saver, global or per game | sets Anti-Lag, upscaling, sharpening, filtering and the FPS cap together | Yes |
 
 ## Display
 
@@ -71,7 +72,7 @@ What the Windows Radeon software does, and what Ember uses on Linux to do the sa
 | Auto-start replay with games | Starts when a game is detected, stops when it closes | Ember game detection | Yes |
 | Clips organized by game | `<Videos>/Ember/<Game>/<Game> <date> Replay.mp4` | | Yes |
 | AV1 / HEVC / H.264 | Picks what the GPU's encoder supports | `gpu-screen-recorder --info` | AV1 needs RDNA 3+ |
-| Streaming | - | gpu-screen-recorder can stream over RTMP | Planned |
+| Live streaming | Twitch, YouTube or any RTMP server; H.264 at 3 to 12 Mbps with the GPU encoder | gpu-screen-recorder RTMP output (`-c flv`) | Yes |
 
 ## System & tools
 

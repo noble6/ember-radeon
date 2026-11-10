@@ -41,6 +41,17 @@ DEFAULTS = {
     "replay_seconds": 60,
     "auto_replay": False,      # start the replay buffer when a game starts
     "per_game_folders": True,
+    "stream_service": "twitch",   # twitch | youtube | custom
+    "stream_url": "",             # custom only: rtmp://host/app
+    "stream_key": "",
+    "stream_kbps": 6000,
+}
+
+# Ingest servers the stream key is appended to.
+STREAM_SERVICES = {
+    "twitch": ("Twitch", "rtmp://live.twitch.tv/app"),
+    "youtube": ("YouTube", "rtmp://a.rtmp.youtube.com/live2"),
+    "custom": ("Custom server", ""),
 }
 
 
@@ -122,13 +133,46 @@ def pick_capture(cfg: dict, caps: dict) -> str:
     return "portal" if "portal" in names else "screen"
 
 
+def stream_target(cfg: dict) -> str:
+    """Full RTMP address to publish to. Raises RecorderError with a message for the user."""
+    service = cfg.get("stream_service", "twitch")
+    key = str(cfg.get("stream_key") or "").strip()
+    base = STREAM_SERVICES.get(service, ("", ""))[1] if service != "custom" else str(cfg.get("stream_url") or "").strip()
+    if not re.fullmatch(r"rtmps?://[^\s/]+(/[^\s]*)?", base):
+        raise RecorderError("Enter the server address (rtmp://...)" if service == "custom" else "Unknown streaming service")
+    if re.search(r"\s", key):
+        raise RecorderError("The stream key must not contain spaces")
+    if not key and service != "custom":
+        raise RecorderError("Enter your stream key first")
+    return base.rstrip("/") + ("/" + key if key else "")
+
+
+def redact(text: str, cfg: dict) -> str:
+    """Never show a stream key in a message, log line or notification."""
+    key = str(cfg.get("stream_key") or "").strip()
+    return text.replace(key, "<stream key>") if len(key) >= 4 else text
+
+
 def build_args(cfg: dict, caps: dict, mode: str, out: str) -> list[str]:
-    """mode: 'record' (out = file), 'replay' (out = directory), 'screenshot' (out = file)."""
+    """mode: 'record' (out = file), 'replay' (out = directory), 'screenshot' (out = file),
+    'stream' (out = RTMP address)."""
     args = [BIN, "-w", pick_capture(cfg, caps)]
     if args[2] == "portal":
         args += ["-restore-portal-session", "yes"]
     if mode == "screenshot":
         return args + ["-cursor", "yes" if cfg.get("cursor", True) else "no", "-o", out]
+    if mode == "stream":
+        # RTMP ingest wants FLV with H.264 + AAC at a constant bitrate.
+        kbps = max(1000, min(51000, int(cfg.get("stream_kbps") or 6000)))
+        args += ["-c", "flv", "-f", str(min(60, int(cfg.get("fps") or 60))), "-k", "h264", "-ac", "aac",
+                 "-cursor", "yes" if cfg.get("cursor", True) else "no", "-bm", "cbr", "-q", str(kbps)]
+        if cfg.get("desktop_audio", True) and cfg.get("mic"):
+            args += ["-a", "default_output|default_input"]      # one mixed track: services take a single one
+        elif cfg.get("mic"):
+            args += ["-a", "default_input"]
+        elif cfg.get("desktop_audio", True):
+            args += ["-a", "default_output"]
+        return args + ["-o", out, "-ipc", str(SOCK)]
     container = cfg.get("container", "mp4") if cfg.get("container") in ("mp4", "mkv") else "mp4"
     args += ["-c", container, "-f", str(int(cfg.get("fps") or 60)), "-k", pick_codec(cfg, caps),
              "-ac", "aac" if container == "mp4" else "opus",
@@ -247,6 +291,7 @@ class Recorder:
             self._reset()
             return {"mode": None, "error": err}
         return {"mode": self.mode, "since": self.started,
+                "streaming": self.mode == "stream",
                 "recording": self.mode == "record" or bool(self.replay_recording_since),
                 "recording_since": self.started if self.mode == "record" else self.replay_recording_since,
                 "replay": self.mode == "replay"}
@@ -269,7 +314,9 @@ class Recorder:
         RUNTIME.mkdir(parents=True, exist_ok=True)
         SOCK.unlink(missing_ok=True)
         LOG.parent.mkdir(parents=True, exist_ok=True)
-        log = open(LOG, "w")
+        # The recorder prints its output address, which for a stream includes the key: owner only.
+        log = os.fdopen(os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w")
+        os.chmod(LOG, 0o600)
         self.proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                      start_new_session=True)
         log.close()
@@ -316,6 +363,8 @@ class Recorder:
 
     # -- actions (blocking; run them off the GUI thread)
     def start_recording(self, cfg: dict, caps: dict) -> None:
+        if self.mode == "stream":
+            raise RecorderError("Stop the live stream first")
         if self.mode == "replay":
             self._ipc("start-replay-recording")
             self.replay_recording_since = time.time()
@@ -343,6 +392,8 @@ class Recorder:
         return None
 
     def start_replay(self, cfg: dict, caps: dict) -> None:
+        if self.mode == "stream":
+            raise RecorderError("Stop the live stream first")
         out = Path(cfg["output_dir"]).expanduser()
         out.mkdir(parents=True, exist_ok=True)
         self._spawn(build_args(cfg, caps, "replay", str(out)), "replay")
@@ -373,6 +424,24 @@ class Recorder:
         self._wait_exit()
         self._reset()
         return saved
+
+    def start_stream(self, cfg: dict, caps: dict) -> None:
+        if self.mode:
+            raise RecorderError("Stop recording or Instant Replay first")
+        try:
+            self._spawn(build_args(cfg, caps, "stream", stream_target(cfg)), "stream")
+        except RecorderError as e:
+            raise RecorderError(redact(str(e), cfg)) from None
+
+    def stop_stream(self) -> None:
+        if self.mode != "stream":
+            return
+        try:
+            self._ipc("stop", timeout=10)
+        except RecorderError:
+            self._signal_stop()
+        self._wait_exit()
+        self._reset()
 
     def screenshot(self, cfg: dict, caps: dict) -> str:
         out = Path(cfg["output_dir"]).expanduser()

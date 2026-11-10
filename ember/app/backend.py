@@ -128,9 +128,9 @@ class Backend(QObject):
         self._utimer = QTimer(self)
         self._utimer.timeout.connect(self._poll_update)
         self._utimer.start(5000)
-        QTimer.singleShot(20000, self.checkUpdates)
+        QTimer.singleShot(20000, self._scheduled_check)
         self._uctimer = QTimer(self)
-        self._uctimer.timeout.connect(self.checkUpdates)
+        self._uctimer.timeout.connect(self._scheduled_check)
         self._uctimer.start(6 * 3600 * 1000)
         self._rtimer = QTimer(self)
         self._rtimer.timeout.connect(self._poll_rec)
@@ -230,7 +230,12 @@ class Backend(QObject):
 
     def _save_settings(self):
         GM.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        SETTINGS_FILE.write_text(json.dumps(self._settings, indent=1))
+        tmp = SETTINGS_FILE.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # may hold a stream key: owner only
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(self._settings, indent=1))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, SETTINGS_FILE)
 
     @Property("QVariant", notify=settingsChanged)
     def settings(self):
@@ -399,16 +404,35 @@ class Backend(QObject):
             "url": self._upd["url"],
             "notes": self._upd["notes"],
             "auto": UPD.auto_enabled(),
+            "interval": UPD.interval(),
+            "previous": UPD.previous_version() if self._upd_kind == "local" else None,
+            "skipped": UPD.skipped_version(),
+            "rolled_back": st.get("failed") if st.get("state") == "rolled-back" else None,
             "status": st.get("state"),
-            "status_error": st.get("error") if st.get("state") == "error" else None,
+            "status_error": st.get("error") if st.get("state") in ("error", "rolled-back", "skipped") else None,
             "busy": busy,
             "last_checked": st.get("time"),
         }
+
+    def _scheduled_check(self):
+        """The app's own look at the releases page (for the "update available" notice):
+        follows the same daily / weekly / monthly rhythm as the installer."""
+        if UPD.check_due(self._settings.get("last_update_check")):
+            self.checkUpdates()
+
+    @Slot(str)
+    def setUpdateInterval(self, every):
+        if every not in UPD.INTERVALS:
+            return
+        self._cmd({"cmd": "set_update", "interval": every}, f"Ember will check for updates {every}")
+        QTimer.singleShot(600, self.updateChanged.emit)
 
     @Slot()
     def checkUpdates(self):
         if self._upd["checking"]:
             return
+        self._settings["last_update_check"] = time.time()
+        self._save_settings()
         self._upd["checking"] = True
         self.updateChanged.emit()
 
@@ -435,6 +459,21 @@ class Backend(QObject):
         self._run(job, lambda _: self.toast.emit("Updating Ember in the background"),
                   lambda e: self.toast.emit(f"Update: {e}"))
 
+    @Slot()
+    def rollbackUpdate(self):
+        """Go back to the version that was installed before the last update."""
+        if self._upd_kind != "local" or not UPD.previous_version():
+            self.toast.emit("There is no previous version to go back to")
+            return
+
+        def job():
+            r = subprocess.run(["systemctl", "start", "--no-block", "ember-rollback.service"],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or "could not start the rollback").strip().splitlines()[-1])
+        self._run(job, lambda _: self.toast.emit("Going back to the previous version"),
+                  lambda e: self.toast.emit(f"Rollback: {e}"))
+
     @Slot(bool)
     def setAutoUpdate(self, on):
         self._cmd({"cmd": "set_update", "auto": bool(on)},
@@ -448,6 +487,9 @@ class Backend(QObject):
             self._upd_status = st
             if st.get("state") == "updated" and prev and prev != "updated":
                 self.recEvent.emit("Ember updated", f"Version {st.get('current')} is installed")
+            if st.get("state") == "rolled-back" and prev and prev != "rolled-back":
+                self.recEvent.emit("Ember update rolled back",
+                                   f"Version {st.get('failed')} did not work here. You are back on {st.get('current')}.")
             self.updateChanged.emit()
         rn = self.updateInfo["restart_needed"]
         if rn != self._restart_needed:
@@ -489,6 +531,10 @@ class Backend(QObject):
     def recConfig(self):
         return self._settings["rec"]
 
+    @Property("QVariant", constant=True)
+    def streamServices(self):
+        return [{"key": k, "label": v[0]} for k, v in REC.STREAM_SERVICES.items()]
+
     @Property("QVariant", notify=recChanged)
     def hotkeys(self):
         return {"kde": self._hotkeys.enabled, "list": self._hotkeys.describe()}
@@ -502,7 +548,13 @@ class Backend(QObject):
             return      # a start/stop is in flight on a worker; it reports the new state itself
         st = self._rec.status()
         if st != self._rec_state:
-            if st.get("error") and self._rec_state.get("mode"):
+            if st.get("error"):
+                st["error"] = REC.redact(st["error"], self._settings["rec"])
+            if self._rec_state.get("mode") == "stream" and not st.get("mode"):
+                why = st.get("error") or "the connection to the server was lost"
+                self.recEvent.emit("Live stream ended", why)
+                self.toast.emit(f"Live stream ended: {why}")
+            elif st.get("error") and self._rec_state.get("mode"):
                 self.recEvent.emit("Recording stopped", st["error"])
                 self.toast.emit(f"Recorder stopped: {st['error']}")
             self._rec_state = st
@@ -517,7 +569,10 @@ class Backend(QObject):
         self._settings["rec"][key] = value
         self._save_settings()
         self.recChanged.emit()
-        if key not in ("auto_replay", "output_dir", "per_game_folders") and self._rec_state.get("mode") == "replay":
+        if key.startswith("stream_"):
+            if self._rec_state.get("mode") == "stream":
+                self.toast.emit("Stop and restart the stream to use the new settings")
+        elif key not in ("auto_replay", "output_dir", "per_game_folders") and self._rec_state.get("mode") == "replay":
             self.toast.emit("Turn Instant Replay off and on again to use the new settings")
 
     def _game_now(self):
@@ -559,6 +614,8 @@ class Backend(QObject):
             self._rec_job("replay-off" if st.get("mode") == "replay" else "replay-on")
         elif action == "screenshot":
             self._rec_job("screenshot")
+        elif action == "toggle-stream":
+            self._rec_job("stream-off" if st.get("mode") == "stream" else "stream-on")
 
     @Slot(int)
     def saveReplaySeconds(self, seconds):
@@ -590,6 +647,12 @@ class Backend(QObject):
                 return ("replay-saved", REC.file_clip(rec.save_replay(seconds), cfg, game, "replay"))
             if job == "screenshot":
                 return ("shot", REC.file_clip(rec.screenshot(cfg, caps), cfg, game, "screenshot"))
+            if job == "stream-on":
+                rec.start_stream(cfg, caps)
+                return ("live", None)
+            if job == "stream-off":
+                rec.stop_stream()
+                return ("stream-off", None)
             return (None, None)
 
         def done(res):
@@ -611,6 +674,14 @@ class Backend(QObject):
                 self._hud_flash(["INSTANT REPLAY OFF"])
                 if not quiet:
                     self.toast.emit("Instant Replay off")
+            elif what == "live":
+                name = REC.STREAM_SERVICES.get(cfg.get("stream_service"), ("your server",))[0]
+                self._hud_flash(["● LIVE", f"Streaming to {name}"])
+                self.toast.emit(f"You are live on {name}")
+                self.recEvent.emit("Live stream started", f"Streaming to {name}")
+            elif what == "stream-off":
+                self._hud_flash(["STREAM ENDED"])
+                self.toast.emit("Live stream ended")
             elif what in ("saved", "replay-saved", "shot"):
                 title = {"saved": "Recording saved", "replay-saved": f"Replay saved ({secs} s)",
                          "shot": "Screenshot saved"}[what]
@@ -626,8 +697,9 @@ class Backend(QObject):
             self._rec_busy = False
             self._rec_state = rec.status()
             self.recChanged.emit()
-            self.toast.emit(f"Recorder: {e}")
-            self._hud_flash(["RECORDER ERROR", str(e)[:60]])
+            msg = REC.redact(str(e), cfg)
+            self.toast.emit(f"Recorder: {msg}")
+            self._hud_flash(["RECORDER ERROR", msg[:60]])
 
         self._rec_busy = True
         self.recChanged.emit()
@@ -674,6 +746,8 @@ class Backend(QObject):
                     REC.file_clip(path, cfg, g["name"] if g else None, "video")
                 if self._rec.mode == "replay":
                     self._rec.stop_replay()
+                if self._rec.mode == "stream":
+                    self._rec.stop_stream()
             except REC.RecorderError:
                 pass
 
@@ -892,6 +966,47 @@ class Backend(QObject):
                   f"Saved “{name}”" + (" and applied" if activate else ""))
 
     @Slot(str)
+    def exportProfile(self, name):
+        settings = (self.gpuState.get("profiles") or {}).get(name)
+        if not settings:
+            self.toast.emit("Save the profile first")
+            return
+        d = Path(os.environ.get("XDG_DOCUMENTS_DIR", Path.home() / "Documents")) / "Ember profiles"
+        safe = "".join(ch if ch.isalnum() or ch in " ._-" else "_" for ch in name).strip() or "profile"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            path = d / f"{safe}.ember-profile.json"
+            path.write_text(json.dumps(T.export_profile(name, settings, self.gpu.get("name", "")), indent=1))
+        except OSError as e:
+            self.toast.emit(f"Couldn't export: {e}")
+            return
+        self.toast.emit(f"Exported to {path}")
+
+    @Slot(str, result=str)
+    def importProfile(self, url):
+        """Import an exported profile. Returns the name it was saved under ('' on failure)."""
+        path = QUrl(url).toLocalFile() if str(url).startswith("file:") else str(url)
+        try:
+            if os.path.getsize(path) > T.PROFILE_FILE_MAX:
+                raise T.InvalidSettings("that file is too large to be a profile")
+            name, settings = T.parse_profile_file(Path(path).read_text(errors="replace"), self._tuning)
+        except (OSError, T.InvalidSettings) as e:
+            self.toast.emit(f"Import failed: {e}")
+            return ""
+        have = set((self.gpuState.get("profiles") or {}).keys())
+        base, n = name, 2
+        while name in have:
+            name = f"{base[:36]} {n}"
+            n += 1
+        self._cmd({"cmd": "save_profile", "name": name, "settings": settings, "activate": False},
+                  f"Imported “{name}”. Review it, then activate")
+        return name
+
+    @Property(str, constant=True)
+    def profilesFolder(self):
+        return QUrl.fromLocalFile(str(Path(os.environ.get("XDG_DOCUMENTS_DIR", Path.home() / "Documents")))).toString()
+
+    @Slot(str)
     def deleteProfile(self, name):
         self._cmd({"cmd": "delete_profile", "name": name}, f"Deleted “{name}”")
 
@@ -987,6 +1102,27 @@ class Backend(QObject):
             self._games = games
             self.gamesChanged.emit()
         self._run(GM.scan_steam, ok)
+
+    @Property("QVariant", constant=True)
+    def graphicsPresets(self):
+        return [{k: p[k] for k in ("key", "label", "icon", "blurb")} for p in GM.GRAPHICS_PRESETS]
+
+    @Slot("QVariant", result=str)
+    def graphicsPresetOf(self, gfx):
+        if hasattr(gfx, "toVariant"):
+            gfx = gfx.toVariant()
+        return GM.preset_of(gfx or {})
+
+    @Slot("QVariant", str, result="QVariant")
+    def withGraphicsPreset(self, gfx, key):
+        """The given settings with one preset applied on top."""
+        if hasattr(gfx, "toVariant"):
+            gfx = gfx.toVariant()
+        out = dict(gfx or {})
+        p = next((p for p in GM.GRAPHICS_PRESETS if p["key"] == key), None)
+        if p:
+            out.update(p["set"])
+        return out
 
     @Slot(str, "QVariant")
     def setGraphics(self, game_id, gfx):

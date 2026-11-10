@@ -31,10 +31,13 @@ API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 USER_AGENT = "ember-updater"
 LOCAL_LIB = Path("/usr/local/lib/ember")      # where install.sh puts Ember
+PREVIOUS_LIB = Path("/usr/local/lib/ember.prev")   # the version before the last update (the fall-back)
 STATE_DIR = Path(os.environ.get("EMBER_STATE_DIR", "/var/lib/ember"))
 SETTINGS = STATE_DIR / "update.json"           # {"auto": bool}, written by emberd
 STATUS = STATE_DIR / "update-status.json"      # written by the updater, read by the app
+SKIP = STATE_DIR / "update-skip.json"          # {"version": v}: a release that was rolled back; not retried
 RETRY_DELAY = 5.0                              # seconds; grows with each retry
+INTERVALS = {"daily": 1, "weekly": 7, "monthly": 30}   # how often to look for a release (days)
 MAX_DOWNLOAD = 64 * 1024 * 1024                # a release is about 1 MB; refuse anything absurd
 
 
@@ -211,3 +214,31 @@ def read_json(path: Path, default):
 
 def auto_enabled() -> bool:
     return bool(read_json(SETTINGS, {}).get("auto", True))
+
+
+def skipped_version() -> str | None:
+    v = read_json(SKIP, {}).get("version")
+    return v if isinstance(v, str) and v else None
+
+
+def previous_version() -> str | None:
+    """Version kept as the fall-back, if there is one."""
+    return installed_version(PREVIOUS_LIB)
+
+
+def interval() -> str:
+    v = read_json(SETTINGS, {}).get("interval")
+    return v if v in INTERVALS else "daily"
+
+
+def check_due(last: float | None, now: float | None = None, every: str | None = None) -> bool:
+    """True if a scheduled check should run. `last` is when one last ran (None = never).
+    The timer fires once a day with some jitter, so a few hours of slack keep a weekly
+    check from slipping to every eighth day."""
+    every = every or interval()
+    if every == "daily" or not last:
+        return True
+    now = time.time() if now is None else now
+    if last > now:          # clock went backwards: don't wait forever
+        return True
+    return now - last >= INTERVALS[every] * 86400 - 3 * 3600

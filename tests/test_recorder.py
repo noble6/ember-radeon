@@ -74,6 +74,27 @@ class RecorderTests(unittest.TestCase):
         self.assertFalse(rec.alive())
         rec._signal_stop()                                          # must not signal us
 
+    def test_stream_args_and_target(self):
+        cfg = self.cfg(stream_service="twitch", stream_key="live_abc123", stream_kbps=6000, mic=True, fps=144)
+        self.assertEqual(R.stream_target(cfg), "rtmp://live.twitch.tv/app/live_abc123")
+        a = R.build_args(cfg, CAPS, "stream", R.stream_target(cfg))
+        self.assertEqual(a[a.index("-c") + 1], "flv")
+        self.assertEqual(a[a.index("-k") + 1], "h264")                 # ingest servers want H.264
+        self.assertEqual(a[a.index("-f") + 1], "60")                   # capped: services do not take 144 FPS
+        self.assertEqual((a[a.index("-bm") + 1], a[a.index("-q") + 1]), ("cbr", "6000"))
+        self.assertEqual(a[a.index("-a") + 1], "default_output|default_input")   # one mixed audio track
+        self.assertEqual(a.count("-a"), 1)
+        self.assertEqual(a[a.index("-o") + 1], "rtmp://live.twitch.tv/app/live_abc123")
+        self.assertEqual(R.stream_target(self.cfg(stream_service="youtube", stream_key="k")),
+                         "rtmp://a.rtmp.youtube.com/live2/k")
+        self.assertEqual(R.stream_target(self.cfg(stream_service="custom", stream_url="rtmps://h:443/app/", stream_key="")),
+                         "rtmps://h:443/app")
+        for bad in (dict(stream_service="twitch", stream_key=""), dict(stream_service="custom", stream_url="file:///etc/passwd"),
+                    dict(stream_service="custom", stream_url="rtmp://h/app -o /tmp/x"), dict(stream_service="twitch", stream_key="a b")):
+            with self.assertRaises(R.RecorderError):
+                R.stream_target(self.cfg(**bad))
+        self.assertNotIn("live_abc123", R.redact("could not open rtmp://live.twitch.tv/app/live_abc123", cfg))
+
     def test_status_when_idle(self):
         os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp()
         rec = R.Recorder()
