@@ -252,7 +252,157 @@ class CoreTests(unittest.TestCase):
         a = json.loads(f.readline()); b = json.loads(f.readline())
         self.assertTrue(a["ok"]); self.assertEqual(a["gpus"], ["0000:03:00.0"])
         self.assertFalse(b["ok"])
+        f.close(); s.close()
         srv.shutdown(); srv.server_close()
+
+    # ---- safety behaviour added in 1.5
+
+    def _fan_setup(self, fan):
+        G, T, D, log = load(self.tmp)
+        d = D.Daemon()
+        key = "0000:03:00.0"
+        hw = self.tmp / "sys/devices/pci0000:00/0000:00:01.1/0000:03:00.0/hwmon/hwmon2"
+        d.handle({"cmd": "save_profile", "gpu": key, "name": "F", "activate": True, "settings": {"fan": fan}}, uid=0)
+        return D, d, key, hw
+
+    def test_fan_safety_floor_overrides_a_silent_profile(self):
+        D, d, key, hw = self._fan_setup({"mode": "fixed", "fixed_pct": 0})
+        self.assertEqual(int((hw / "pwm1").read_text()), 0)          # 60 C: the user's 0% stands
+        (hw / "temp2_input").write_text("95000")                      # 15 C below critical
+        d.ctl[key].fan_tick()
+        self.assertEqual(int((hw / "pwm1").read_text()), round(255 * 0.60))
+        (hw / "temp2_input").write_text("60000")
+        (hw / "temp3_input").write_text("101000")                     # memory sensor near its own limit
+        d.ctl[key].fan_tick()
+        self.assertEqual(int((hw / "pwm1").read_text()), 255)
+        d.shutdown()
+
+    def test_fan_returns_to_auto_when_sensors_fail(self):
+        D, d, key, hw = self._fan_setup({"mode": "curve", "curve": [[40, 20], [80, 100]]})
+        self.assertEqual((hw / "pwm1_enable").read_text().strip(), "1")
+        for n in (1, 2, 3):
+            (hw / f"temp{n}_input").unlink()
+        for _ in range(D.SENSOR_FAILS_MAX):
+            d._tick()
+        self.assertEqual((hw / "pwm1_enable").read_text().strip(), "2")
+        self.assertIn("sensor", d.runtime[key]["fan_fault"])
+        self.assertIn("fan", d.runtime[key]["error"])
+
+    def test_control_loop_survives_errors_and_fails_safe(self):
+        D, d, key, hw = self._fan_setup({"mode": "fixed", "fixed_pct": 30})
+        d.ctl[key].fan_tick = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        waits = iter([False] * 4 + [True])
+        d.stop.wait = lambda _t: next(waits)
+        import logging
+        logging.disable(logging.CRITICAL)
+        try:
+            d.loop()                                                  # must not raise
+        finally:
+            logging.disable(logging.NOTSET)
+        self.assertEqual((hw / "pwm1_enable").read_text().strip(), "2")
+
+    def test_fan_left_manual_by_a_crash_is_recovered(self):
+        D, d, key, hw = self._fan_setup({"mode": "fixed", "fixed_pct": 30})
+        marker = d.ctl[key]._fan_marker
+        self.assertTrue(marker.exists())
+        self.assertEqual((hw / "pwm1_enable").read_text().strip(), "1")
+        # no shutdown(): the process "died". A new instance (or --release-fans) cleans up.
+        D.Daemon()
+        self.assertEqual((hw / "pwm1_enable").read_text().strip(), "2")
+        self.assertFalse(marker.exists())
+
+    def test_service_restart_keeps_the_active_profile_but_a_reboot_does_not(self):
+        G, T, D, log = load(self.tmp)
+        bid = self.tmp / "proc/sys/kernel/random/boot_id"
+        bid.parent.mkdir(parents=True)
+        bid.write_text("boot-one\n")
+        key = "0000:03:00.0"
+        d = D.Daemon()
+        d.boot()
+        d.handle({"cmd": "activate", "gpu": key, "name": "Quiet"}, uid=0)
+        d.shutdown()
+        log.clear()
+        d2 = D.Daemon()                       # restarted by an update, same boot
+        d2.boot()
+        self.assertEqual(d2.runtime[key]["applied"], "Quiet")
+        self.assertIn(("pp_power_profile_mode", "2"), log)      # Quiet = POWER_SAVING, put back
+        self.assertIn(("pwm1_enable", "1"), log)                # and its fan curve is running again
+        d2.shutdown()
+        bid.write_text("boot-two\n")
+        d3 = D.Daemon()                       # real reboot, "apply at boot" is off
+        d3.boot()
+        self.assertIsNone(d3.state["gpus"][key]["active"])
+        self.assertIsNone(d3.runtime[key]["applied"])
+
+    def test_sleeping_laptop_gpu_is_left_alone(self):
+        D, d, key, hw = self._fan_setup({"mode": "fixed", "fixed_pct": 30})
+        dev = hw.parent.parent
+        (dev / "power").mkdir()
+        (dev / "power/runtime_status").write_text("suspended\n")
+        (hw / "pwm1").write_text("7")
+        (hw / "temp2_input").write_text("106000")
+        d._tick()
+        self.assertEqual(int((hw / "pwm1").read_text()), 7)           # nothing read, nothing written
+        self.assertTrue(d.ctl[key].gpu.snapshot()["asleep"])
+        d.shutdown()
+
+    def test_bad_requests_are_rejected_cleanly(self):
+        G, T, D, log = load(self.tmp)
+        d = D.Daemon()
+        key = "0000:03:00.0"
+        st = d.ctl[key].state()
+        for bad in (float("inf"), float("-inf"), float("nan")):
+            with self.assertRaises(T.InvalidSettings):
+                T.validate({"fan": {"fixed_pct": bad}}, st)
+        for req in ({"cmd": "save_profile", "name": ["x"], "settings": {}},
+                    {"cmd": "save_profile", "name": "a\nb", "settings": {}},
+                    {"cmd": "delete_profile", "name": {"a": 1}},
+                    {"cmd": "activate", "name": ["Quiet"]}):
+            with self.assertRaises(ValueError):
+                d.handle({**req, "gpu": key}, uid=0)
+        d.handle({"cmd": "set_rules", "gpu": key, "rules": ["junk", 5, {"match": "exe:ok", "profile": "Quiet"}]}, uid=0)
+        self.assertEqual([r["match"] for r in d.state["gpus"][key]["rules"]], ["exe:ok"])
+        for i in range(D.MAX_PROFILES):
+            try:
+                d.handle({"cmd": "save_profile", "gpu": key, "name": f"p{i}", "settings": {}}, uid=0)
+            except ValueError:
+                break
+        self.assertEqual(len(d.state["gpus"][key]["profiles"]), D.MAX_PROFILES)
+
+    def test_socket_limits(self):
+        G, T, D, log = load(self.tmp)
+        d = D.Daemon()
+        D.Handler.daemon_ref = d
+        srv = D.Server(os.environ["EMBER_SOCKET"], D.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        def conn():
+            s = socket.socket(socket.AF_UNIX)
+            s.settimeout(5)
+            s.connect(os.environ["EMBER_SOCKET"])
+            return s
+        try:
+            big = conn()
+            big.sendall(b"x" * (D.MAX_REQUEST + 10))                  # no newline, far too long
+            self.assertIn(b"too large", big.makefile("rb").readline())
+            big.close()
+            time.sleep(0.2)
+            held = [conn() for _ in range(D.MAX_CLIENTS_PER_UID)]
+            for h in held:                                            # make sure each one is being served
+                h.sendall(b'{"cmd":"hello"}\n')
+                self.assertTrue(json.loads(h.makefile("rb").readline())["ok"])
+            extra = conn()
+            self.assertIn(b"too many connections", extra.makefile("rb").readline())
+            extra.close()
+            for h in held:
+                h.close()
+            time.sleep(0.3)
+            again = conn()                                            # slots are released
+            again.sendall(b'{"cmd":"hello"}\n')
+            self.assertTrue(json.loads(again.makefile("rb").readline())["ok"])
+            again.close()
+        finally:
+            srv.shutdown(); srv.server_close()
 
 
 if __name__ == "__main__":

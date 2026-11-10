@@ -16,9 +16,9 @@ Card {
     implicitHeight: 148
     Row {
         id: head
-        x: 20; y: 18
+        x: 16; y: 14
         spacing: 10
-        Icon { name: root.icon; size: 20; color: root.accent; anchors.verticalCenter: parent.verticalCenter }
+        IconBadge { icon: root.icon; size: 32; accent: root.accent; anchors.verticalCenter: parent.verticalCenter }
         Label { text: root.label; role: "labelL"; color: Theme.inkVariant; anchors.verticalCenter: parent.verticalCenter }
     }
     Row {
@@ -28,7 +28,7 @@ Card {
         Label { text: root.unit; role: "titleS"; color: Theme.inkVariant; anchors.baseline: big.baseline }
     }
     Label { visible: root.sub !== ""; text: root.sub; role: "labelS"; color: Theme.inkVariant
-            anchors.right: root.right; anchors.rightMargin: 20; y: 20 }
+            anchors.right: root.right; anchors.rightMargin: 20; y: 22 }
     LineChart {
         anchors.left: root.left; anchors.right: root.right; anchors.bottom: root.bottom
         anchors.margins: 6; anchors.bottomMargin: 10

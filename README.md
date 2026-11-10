@@ -73,7 +73,7 @@ Uninstall with `./install.sh --uninstall`.
 
 ### Updates
 
-Ember keeps itself up to date. Once a day a small system timer checks GitHub for a new release, downloads it, verifies it against the published SHA-256 checksum and installs it. The service restarts on its own, and the app restarts the next time it is sitting in the tray. You can turn this off, check manually, or update right away from **Settings > Updates**. Driver updates (Mesa, the kernel) never need an Ember update: Ember reads what your system provides each time it starts.
+Ember keeps itself up to date. Once a day a small system timer checks GitHub for a new release, downloads it, checks its Ed25519 signature against the release key built into Ember and installs it. The signing key is not stored on GitHub, so a release that was not signed by the maintainer is refused even if it appears on the releases page. The service restarts on its own, and the app restarts the next time it is sitting in the tray. You can turn this off, check manually, or update right away from **Settings > Updates**. Driver updates (Mesa, the kernel) never need an Ember update: Ember reads what your system provides each time it starts.
 
 Installed from the AUR or another package? Then your package manager handles updates and the built-in updater stays out of the way.
 
@@ -90,10 +90,13 @@ Games outside Steam (Flatpaks like Sober, Lutris, Heroic, Bottles, native games)
 ## Safety
 
 - **One privileged component.** `emberd` is the only thing that writes to sysfs. It runs under systemd sandboxing, with no network, a read-only system and only `/sys` writable. It clamps every value to the ranges the driver reports and **never raises voltage above stock**. Changes are accepted only from root, `wheel`, or the users listed in `/etc/ember/emberd.conf`.
-- **Fans:** forced to 100% within 5 °C of the hotspot limit, and handed back to firmware if the service stops.
+- **Fans:** a safety floor sits on top of every fixed speed and curve. From 20 °C below any sensor's critical temperature the fan speeds up no matter what the profile says, reaching 100% at 5 °C below. If the temperature sensor stops answering, or the control loop fails, the fan goes back to the firmware. The same happens when the service stops for any reason, including a crash or a kill (`ExecStopPost`).
+- **Service restarts:** an update or a crash restarts the service without dropping your active profile.
+- **Local users:** anyone may read the state, only authorized users may change it. Requests are size-limited, idle connections time out, and connections are capped per user.
+- **Laptops:** a discrete GPU that is powered down is left asleep; Ember does not poll it awake.
 - **Boot guard:** if a boot with custom clocks doesn't survive 90 seconds, the next boot skips them.
 - **Resume:** if the driver resets your settings after suspend, Ember re-applies them.
-- **Steam config:** Ember edits only one value in `localconfig.vdf`, keeps a backup, checks that nothing else in the parsed file changed, and refuses to write while Steam is running.
+- **Steam config:** Ember edits only one value in `localconfig.vdf`, keeps the three newest backups, checks that nothing else in the parsed file changed, and refuses to write while Steam is running.
 
 ## How it compares
 

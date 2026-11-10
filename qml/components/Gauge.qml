@@ -12,17 +12,25 @@ Item {
     property string text: isNaN(value) ? "—" : Math.round(value).toString()
     property string sub: ""
     property color color: Theme.primary
-    property real thickness: 14
+    property real thickness: 16
+    property string icon: ""
     readonly property real frac: isNaN(value) ? 0 : Math.max(0, Math.min(1, (value - from) / (to - from)))
     property real shown: frac
     Behavior on shown { NumberAnimation { duration: 450; easing.type: Easing.OutCubic } }
     implicitWidth: 180; implicitHeight: 180
 
+    Rectangle {   // dial face: lifts the readout off the card
+        anchors.centerIn: parent
+        width: parent.width - root.thickness * 3.4; height: width; radius: width / 2
+        color: Theme.surfaceContainerHigh
+        border.width: 1; border.color: Theme.alpha(root.color, 0.22)
+        Behavior on border.color { ColorAnimation { duration: Theme.medium } }
+    }
     Shape {
         anchors.fill: parent
         preferredRendererType: Shape.CurveRenderer
         ShapePath {
-            strokeColor: Theme.surfaceContainerHighest; strokeWidth: root.thickness
+            strokeColor: Theme.alpha(root.color, Theme.dark ? 0.16 : 0.2); strokeWidth: root.thickness
             fillColor: "transparent"; capStyle: ShapePath.RoundCap
             PathAngleArc { centerX: root.width / 2; centerY: root.height / 2
                            radiusX: root.width / 2 - root.thickness; radiusY: radiusX
@@ -38,8 +46,10 @@ Item {
     }
     Column {
         anchors.centerIn: parent
-        anchors.verticalCenterOffset: 4
+        anchors.verticalCenterOffset: root.icon !== "" ? -2 : 4
         spacing: 0
+        Icon { visible: root.icon !== ""; name: root.icon || "info"; size: 20; color: root.color
+               anchors.horizontalCenter: parent.horizontalCenter }
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: 3

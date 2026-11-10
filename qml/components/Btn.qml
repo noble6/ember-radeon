@@ -24,13 +24,13 @@ Rectangle {
          : variant === "tonal" ? (toggle && selected ? Theme.primary : Theme.secondaryContainer)
          : variant === "elevated" ? Theme.surfaceContainerLow : "transparent"
     border.width: variant === "outlined" ? 1 : 0
-    border.color: Theme.outlineVariant
+    border.color: Theme.outline
     Behavior on color { ColorAnimation { duration: Theme.fast } }
     scale: down ? 0.96 : 1
     Behavior on scale { NumberAnimation { duration: Theme.fast } }
 
-    Rectangle { anchors.fill: parent; radius: parent.radius; color: root.fg; opacity: ma.pressed ? 0.14 : ma.containsMouse ? 0.08 : 0
-                Behavior on opacity { NumberAnimation { duration: 120 } } }
+    opacity: enabled ? 1 : 0.38
+    StateLayer { id: sl; radius: root.radius; tint: root.fg; hovered: ma.containsMouse; pressed: ma.pressed }
     Row {
         id: row
         anchors.centerIn: parent
@@ -42,7 +42,7 @@ Rectangle {
             visible: root.text !== ""
             text: root.text
             color: root.variant === "tonal" && root.toggle && root.selected ? Theme.inkPrimary : root.fg
-            font.family: Theme.font; font.pixelSize: root.size >= 56 ? 16 : 14; font.weight: Font.DemiBold
+            font.family: Theme.font; font.pixelSize: root.size >= 56 ? 16 : 14; font.weight: Font.DemiBold; font.letterSpacing: 0.1
             anchors.verticalCenter: parent.verticalCenter
         }
     }
@@ -51,6 +51,7 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
+        onPressed: (m) => sl.ripple(m.x, m.y)
         onClicked: root.clicked()
         onPressedChanged: root.pressedChanged2(pressed)
     }

@@ -11,7 +11,7 @@ Flickable {
     readonly property var caps: ember.recCaps
     readonly property bool ok: !!caps.available
     property real now: Date.now() / 1000
-    Timer { interval: 500; running: page.visible && (page.st.recording || page.st.mode === "replay"); repeat: true
+    Timer { interval: 500; running: page.visible && ember.uiVisible && (page.st.recording || page.st.mode === "replay"); repeat: true
             onTriggered: page.now = Date.now() / 1000 }
 
     function clock(since) {
@@ -64,7 +64,7 @@ Flickable {
         Row {
             width: parent.width; spacing: 16
             enabled: page.ok
-            opacity: page.ok ? 1 : 0.5
+            opacity: page.ok ? 1 : 0.7
 
             Card {
                 id: recCard
@@ -79,7 +79,7 @@ Flickable {
                     scale: bma.pressed ? 0.94 : 1
                     Behavior on scale { NumberAnimation { duration: Theme.fast } }
                     Icon { anchors.centerIn: parent; name: page.st.recording ? "stop" : "videocam"; size: 52; color: "white" }
-                    SequentialAnimation on opacity { running: !!page.st.recording; loops: Animation.Infinite
+                    SequentialAnimation on opacity { running: !!page.st.recording && ember.uiVisible; loops: Animation.Infinite
                         NumberAnimation { to: 0.75; duration: 700 } NumberAnimation { to: 1; duration: 700 }
                         onRunningChanged: if (!running) bigBtn.opacity = 1 }
                     MouseArea { id: bma; anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -111,9 +111,7 @@ Flickable {
                         width: parent.width; height: 40
                         Row {
                             spacing: 12; anchors.verticalCenter: parent.verticalCenter
-                            Icon { name: "replay"; size: 26; color: page.st.mode === "replay" ? Theme.good : Theme.primary
-                                   anchors.verticalCenter: parent.verticalCenter }
-                            Label { text: "Instant Replay"; role: "titleL"; emphasized: true }
+                            CardTitle { icon: "replay"; text: "Instant Replay" }
                         }
                         M3Switch { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                                    checked: page.st.mode === "replay"; enabled: !page.st.busy
@@ -129,7 +127,7 @@ Flickable {
                     Row {
                         spacing: 8
                         enabled: page.st.mode === "replay" && !page.st.busy
-                        opacity: enabled ? 1 : 0.45
+                        opacity: 1
                         Btn { text: "Save replay"; icon: "save"; onClicked: ember.recAction("save-replay") }
                         Repeater {
                             model: [15, 30, 60].filter(function(s) { return s < page.cfg.replay_seconds })
@@ -147,12 +145,12 @@ Flickable {
         // ------------------------------------------------------------ settings
         Card {
             width: parent.width; height: qs.height + 48
-            enabled: page.ok; opacity: page.ok ? 1 : 0.5
+            enabled: page.ok; opacity: page.ok ? 1 : 0.7
             Column {
                 id: qs
                 x: 24; y: 24; width: parent.width - 48
                 spacing: 10
-                Label { text: "Quality"; role: "titleL"; emphasized: true }
+                CardTitle { icon: "eq"; text: "Quality" }
                 component Pick: Item {
                     id: pk
                     property string label
@@ -214,14 +212,14 @@ Flickable {
 
         Row {
             width: parent.width; spacing: 16
-            enabled: page.ok; opacity: page.ok ? 1 : 0.5
+            enabled: page.ok; opacity: page.ok ? 1 : 0.7
             Card {
                 width: (parent.width - 16) / 2; height: au.height + 48
                 Column {
                     id: au
                     x: 24; y: 24; width: parent.width - 48
                     spacing: 4
-                    Label { text: "Audio & files"; role: "titleL"; emphasized: true; bottomPadding: 6 }
+                    CardTitle { icon: "folder"; text: "Audio & files"; bottomPadding: 6 }
                     SwitchRow { width: parent.width; icon: "volume"; title: "Desktop and game audio"
                                 checked: page.cfg.desktop_audio !== false; onToggled: (on) => ember.setRecSetting("desktop_audio", on) }
                     SwitchRow { width: parent.width; icon: "mic"; title: "Microphone"
@@ -247,8 +245,7 @@ Flickable {
                     Item {
                         width: parent.width; height: 40
                         Row { spacing: 12; anchors.verticalCenter: parent.verticalCenter
-                            Icon { name: "keyboard"; size: 24; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                            Label { text: "Hotkeys"; role: "titleL"; emphasized: true } }
+                            CardTitle { icon: "keyboard"; text: "Hotkeys" } }
                         Btn { visible: !!ember.hotkeys.kde; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                               text: "Change"; variant: "text"; onClicked: ember.openShortcutSettings() }
                     }
@@ -283,7 +280,7 @@ Flickable {
                 spacing: 2
                 Item {
                     width: parent.width; height: 40
-                    Label { text: "Recent clips"; role: "titleL"; emphasized: true; anchors.verticalCenter: parent.verticalCenter }
+                    CardTitle { icon: "movie"; text: "Recent clips"; anchors.verticalCenter: parent.verticalCenter }
                     Btn { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: "Refresh"; icon: "refresh"
                           variant: "text"; onClicked: ember.refreshClips() }
                 }

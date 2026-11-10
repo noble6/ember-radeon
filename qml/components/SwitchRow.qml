@@ -10,15 +10,11 @@ Item {
     signal toggled(bool on)
     implicitHeight: Math.max(56, col.implicitHeight + 16)
     opacity: enabled ? 1 : 0.4
-    Rectangle {
-        visible: root.icon !== ""
+    IconBadge {
         id: ic
-        width: 40; height: 40; radius: 12
+        visible: root.icon !== ""
+        icon: root.icon || "info"; active: root.checked
         anchors.verticalCenter: parent.verticalCenter
-        color: root.checked ? Theme.primaryContainer : Theme.surfaceContainerHighest
-        Behavior on color { ColorAnimation { duration: Theme.fast } }
-        Icon { anchors.centerIn: parent; name: root.icon; size: 22
-               color: root.checked ? Theme.primary : Theme.inkVariant }
     }
     Column {
         id: col

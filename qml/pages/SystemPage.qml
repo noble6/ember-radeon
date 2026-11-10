@@ -55,7 +55,7 @@ Flickable {
                 Column {
                     id: hw
                     x: 24; y: 24; width: parent.width - 48
-                    Label { text: "Graphics card"; role: "titleL"; emphasized: true; bottomPadding: 8 }
+                    CardTitle { icon: "chip"; text: "Graphics card"; bottomPadding: 8 }
                     InfoRow { label: "Name"; value: page.g.name }
                     InfoRow { label: "Chip"; value: page.g.chip }
                     InfoRow { label: "Architecture"; value: page.g.arch }
@@ -74,7 +74,7 @@ Flickable {
                 Column {
                     id: sw
                     x: 24; y: 24; width: parent.width - 48
-                    Label { text: "Software"; role: "titleL"; emphasized: true; bottomPadding: 8 }
+                    CardTitle { icon: "apps"; text: "Software"; bottomPadding: 8 }
                     InfoRow { label: "Operating system"; value: page.sy.os }
                     InfoRow { label: "Kernel"; value: page.sy.kernel }
                     InfoRow { label: "Session"; value: page.sy.session }
@@ -95,7 +95,7 @@ Flickable {
                 Column {
                     id: cp
                     x: 24; y: 24; width: parent.width - 48
-                    Label { text: "Driver controls"; role: "titleL"; emphasized: true; bottomPadding: 8 }
+                    CardTitle { icon: "tune"; text: "Driver controls"; bottomPadding: 8 }
                     Feature { label: "Performance levels"; on: !!page.caps.perf_level }
                     Feature { label: "Workload profiles"; on: !!page.caps.power_profile }
                     Feature { label: "Power limit"; on: !!page.caps.power_cap }
@@ -112,7 +112,7 @@ Flickable {
                 Column {
                     id: ly
                     x: 24; y: 24; width: parent.width - 48
-                    Label { text: "Gaming layers"; role: "titleL"; emphasized: true; bottomPadding: 8 }
+                    CardTitle { icon: "game"; text: "Gaming layers"; bottomPadding: 8 }
                     Feature { label: "Anti-Lag (VK_LAYER_MESA_anti_lag)"; on: !!page.layers.antilag }
                     Feature { label: "Sharpening (vkBasalt)"; on: !!page.layers.vkbasalt; note: page.layers.vkbasalt ? "" : "pacman -S vkbasalt" }
                     Feature { label: "Overlay & FPS cap (MangoHud)"; on: !!page.layers.mangohud; note: page.layers.mangohud ? "" : "pacman -S mangohud" }
@@ -134,8 +134,8 @@ Flickable {
                 x: 24; y: 24; width: parent.width - 48
                 spacing: 4
                 Item {
-                    width: parent.width; height: 36
-                    Label { text: "Shader caches"; role: "titleL"; emphasized: true; anchors.verticalCenter: parent.verticalCenter }
+                    width: parent.width; height: 40
+                    CardTitle { icon: "memory"; text: "Shader caches"; anchors.verticalCenter: parent.verticalCenter }
                     Btn { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: "Rescan"; icon: "refresh"
                           variant: "text"; onClicked: ember.refreshCaches() }
                 }

@@ -26,10 +26,20 @@ def _size(p: Path) -> int:
 
 def mesa_dirs() -> list[Path]:
     base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    names = ("mesa_shader_cache", "mesa_shader_cache_db", "radv_builtin_shaders")
+    roots = [base]
     custom = os.environ.get("MESA_SHADER_CACHE_DIR")
-    cands = [Path(custom)] if custom else []
-    cands += [base / "mesa_shader_cache", base / "mesa_shader_cache_db", base / "radv_builtin_shaders"]
-    return [p for p in cands if p.is_dir()]
+    if custom:
+        # Mesa creates its cache folders *inside* this directory. Never treat the directory
+        # itself as the cache: it may be a shared location with other files in it.
+        roots.insert(0, Path(custom))
+    out = []
+    for r in roots:
+        for n in names:
+            p = r / n
+            if p.is_dir() and not p.is_symlink() and p not in out:
+                out.append(p)
+    return out
 
 
 def steam_dirs() -> dict[str, Path]:

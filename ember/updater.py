@@ -53,6 +53,9 @@ def run(auto: bool, dry_run: bool) -> int:
     if not rel["tarball"] or not rel["checksum"]:
         status("error", current=current, latest=rel["version"], error="release has no verified download")
         return 1
+    if not rel.get("signature"):
+        status("error", current=current, latest=rel["version"], error="release is not signed")
+        return 1
 
     status("downloading", current=current, latest=rel["version"])
     CACHE.mkdir(parents=True, exist_ok=True)
@@ -61,6 +64,7 @@ def run(auto: bool, dry_run: bool) -> int:
         blob = U.download(rel["tarball"], timeout=120)
         U.verify(blob, U.download(rel["checksum"], timeout=30).decode(errors="replace"),
                  f"ember-radeon-{rel['version']}.tar.gz")
+        U.verify_signature(blob, U.download(rel["signature"], timeout=30))   # nothing is unpacked before this
         archive = work / "release.tar.gz"
         archive.write_bytes(blob)
         root = U.safe_extract(archive, work / "src")

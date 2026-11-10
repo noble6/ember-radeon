@@ -102,8 +102,7 @@ Item {
                     x: 24; y: 24; width: parent.width - 48
                     spacing: 16
                     Row { spacing: 12
-                        Icon { name: "speed"; size: 24; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        Label { text: "Performance"; role: "titleL"; emphasized: true } }
+                        CardTitle { icon: "speed"; text: "Performance" } }
                     Label { text: "Clock behaviour"; role: "titleS"; color: Theme.inkVariant }
                     ButtonGroup {
                         width: Math.min(parent.width, 640); itemHeight: 44
@@ -174,8 +173,7 @@ Item {
                     Item {
                         width: parent.width; height: 32
                         Row { spacing: 12
-                            Icon { name: "fan"; size: 24; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                            Label { text: "Fan"; role: "titleL"; emphasized: true } }
+                            CardTitle { icon: "fan"; text: "Fan" } }
                         Label { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                                 text: "Now " + F.num(page.s.fan_rpm) + " RPM · " + F.num(page.s.fan_pct) + "%"
                                 role: "labelL"; color: Theme.inkVariant }
@@ -242,8 +240,7 @@ Item {
                     x: 24; y: 24; width: parent.width - 48
                     spacing: 16
                     Row { spacing: 12
-                        Icon { name: "rocket"; size: 24; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        Label { text: "Clocks & voltage"; role: "titleL"; emphasized: true } }
+                        CardTitle { icon: "rocket"; text: "Clocks & voltage" } }
                     Banner {
                         width: parent.width
                         visible: !page.t.od
@@ -297,8 +294,7 @@ Item {
                     x: 24; y: 24; width: parent.width - 48
                     spacing: 16
                     Row { spacing: 12
-                        Icon { name: "fan"; size: 24; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        Label { text: "Fan firmware options"; role: "titleL"; emphasized: true } }
+                        CardTitle { icon: "fan"; text: "Fan firmware options" } }
                     Label { width: parent.width; wrapMode: Text.WordWrap; role: "bodyS"; color: Theme.inkVariant
                             text: "Settings the card’s own fan controller understands (RDNA3 and newer). They act when the fan is on Firmware mode." }
                     Repeater {

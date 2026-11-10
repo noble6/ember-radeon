@@ -44,8 +44,27 @@ DEFAULTS = {
 }
 
 
+REPLAY_RAM_LIMIT_MB = 1024   # bigger replay buffers go to disk instead of memory
+
+
 class RecorderError(RuntimeError):
     pass
+
+
+def _is_recorder(pid: int | None) -> bool:
+    """True if `pid` is a gpu-screen-recorder process. Guards against a recycled PID:
+    we must never signal some unrelated program that inherited the number."""
+    if not pid:
+        return False
+    try:
+        return Path(f"/proc/{int(pid)}/comm").read_text().strip().startswith("gpu-screen-rec")
+    except (OSError, ValueError):
+        return False
+
+
+def replay_storage(seconds: int, kbps: int) -> str:
+    """'ram' for short buffers, 'disk' once the buffer would hold more than about 1 GB."""
+    return "disk" if seconds * kbps / 8 / 1024 > REPLAY_RAM_LIMIT_MB else "ram"
 
 
 def available() -> bool:
@@ -124,8 +143,9 @@ def build_args(cfg: dict, caps: dict, mode: str, out: str) -> list[str]:
     quality = cfg.get("quality", "very_high")
     if mode == "replay":
         secs = max(5, min(1200, int(cfg.get("replay_seconds") or 60)))
-        args += ["-r", str(secs), "-bm", "cbr", "-q", str(REPLAY_BITRATE.get(quality, 35000)),
-                 "-replay-storage", "ram", "-o", out, "-ro", out]
+        kbps = REPLAY_BITRATE.get(quality, 35000)
+        args += ["-r", str(secs), "-bm", "cbr", "-q", str(kbps),
+                 "-replay-storage", replay_storage(secs, kbps), "-o", out, "-ro", out]
     else:
         args += ["-q", quality if quality in REPLAY_BITRATE else "very_high", "-o", out]
     return args + ["-ipc", str(SOCK)]
@@ -195,8 +215,7 @@ class Recorder:
         """Pick up a recorder left running by a previous Ember session."""
         try:
             st = json.loads(STATE.read_text())
-            os.kill(int(st["pid"]), 0)
-            if SOCK.exists():
+            if _is_recorder(st["pid"]) and SOCK.exists():
                 self.mode, self.started = st["mode"], st["started"]
                 self.out_file = st.get("out_file")
                 self._pid = int(st["pid"])
@@ -220,13 +239,7 @@ class Recorder:
     def alive(self) -> bool:
         if self.proc is not None:
             return self.proc.poll() is None
-        if self.pid:
-            try:
-                os.kill(self.pid, 0)
-                return True
-            except OSError:
-                return False
-        return False
+        return _is_recorder(self.pid)
 
     def status(self) -> dict:
         if self.mode and not self.alive():
@@ -371,7 +384,7 @@ class Recorder:
         return str(path)
 
     def _signal_stop(self):
-        if self.pid:
+        if self.proc is not None or _is_recorder(self.pid):
             try:
                 os.kill(self.pid, signal.SIGINT)
             except OSError:

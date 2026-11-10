@@ -8,13 +8,15 @@ Rectangle {
     property string action: ""
     property string tone: "info"   // info | warn | error
     signal triggered()
-    radius: 20
+    radius: 24
+    border.width: 1
+    border.color: Theme.alpha(tone === "error" ? Theme.hot : tone === "warn" ? Theme.warn : Theme.outlineVariant, 0.35)
     implicitHeight: Math.max(72, col.implicitHeight + 32)
     color: tone === "error" ? Theme.alpha(Theme.hot, 0.14) : tone === "warn" ? Theme.alpha(Theme.warn, 0.12)
                             : Theme.surfaceContainerHigh
-    Icon { id: ic; name: root.icon; size: 24; anchors.left: parent.left; anchors.leftMargin: 20
-           anchors.verticalCenter: parent.verticalCenter
-           color: root.tone === "error" ? Theme.hot : root.tone === "warn" ? Theme.warn : Theme.primary }
+    IconBadge { id: ic; icon: root.icon; anchors.left: parent.left; anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter; round: true
+                accent: root.tone === "error" ? Theme.hot : root.tone === "warn" ? Theme.warn : Theme.primary }
     Column {
         id: col
         anchors.left: ic.right; anchors.leftMargin: 16

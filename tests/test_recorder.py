@@ -59,6 +59,21 @@ class RecorderTests(unittest.TestCase):
         kinds = sorted(c["kind"] for c in R.list_clips(cfg["output_dir"]))
         self.assertEqual(kinds, ["replay", "video"])
 
+    def test_long_replay_buffers_go_to_disk(self):
+        self.assertEqual(R.replay_storage(60, 35000), "ram")        # about 250 MB
+        self.assertEqual(R.replay_storage(1200, 60000), "disk")     # about 8.8 GB
+        args = R.build_args({**R.DEFAULTS, "replay_seconds": 1200, "quality": "ultra"}, CAPS, "replay", "/tmp/x")
+        self.assertEqual(args[args.index("-replay-storage") + 1], "disk")
+
+    def test_recycled_pid_is_not_mistaken_for_the_recorder(self):
+        self.assertFalse(R._is_recorder(os.getpid()))               # alive, but it is this test, not the recorder
+        self.assertFalse(R._is_recorder(None))
+        self.assertFalse(R._is_recorder(2 ** 22 + 12345))
+        rec = R.Recorder()
+        rec._pid, rec.mode = os.getpid(), "replay"                  # stale state pointing at an unrelated process
+        self.assertFalse(rec.alive())
+        rec._signal_stop()                                          # must not signal us
+
     def test_status_when_idle(self):
         os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp()
         rec = R.Recorder()

@@ -37,23 +37,29 @@ Item {
                     id: pill
                     anchors.horizontalCenter: parent.horizontalCenter
                     y: 4; height: 32
-                    width: it.sel ? 56 : (ma.containsMouse ? 56 : 24)
+                    width: it.sel ? 64 : (ma.containsMouse ? 56 : 32)
                     radius: 16
-                    color: it.sel ? Theme.primary : Theme.alpha(Theme.ink, ma.containsMouse ? 0.08 : 0)
+                    // M3: the active destination sits in a tonal indicator, not a solid accent block.
+                    color: it.sel ? Theme.secondaryContainer : "transparent"
                     Behavior on width { NumberAnimation { duration: Theme.medium; easing.type: Easing.OutBack; easing.overshoot: 2 } }
                     Behavior on color { ColorAnimation { duration: Theme.fast } }
+                    StateLayer { id: sl; radius: 16; tint: it.sel ? Theme.inkSecondaryContainer : Theme.ink
+                                 hovered: ma.containsMouse; pressed: ma.pressed }
                     Icon { anchors.centerIn: parent; name: it.modelData.icon; size: 22
-                           color: it.sel ? Theme.inkPrimary : Theme.inkVariant }
+                           color: it.sel ? Theme.primary : Theme.inkVariant
+                           scale: it.sel ? 1.08 : 1
+                           Behavior on scale { NumberAnimation { duration: Theme.medium; easing.type: Easing.OutBack } } }
                 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.top: pill.bottom; anchors.topMargin: 4
                     text: it.modelData.label
                     color: it.sel ? Theme.ink : Theme.inkVariant
-                    font.family: Theme.font; font.pixelSize: 12
+                    font.family: Theme.font; font.pixelSize: 12; font.letterSpacing: 0.2
                     font.weight: it.sel ? Font.Bold : Font.Medium
                 }
                 MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onPressed: (m) => sl.ripple(pill.width / 2, pill.height / 2)
                             onClicked: root.picked(it.index) }
             }
         }

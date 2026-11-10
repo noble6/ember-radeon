@@ -73,7 +73,7 @@ Window {
         color: Theme.inverseSurface
         Row {
             anchors.centerIn: parent; spacing: 8
-            MorphShape { width: 16; height: 16; shape: "cookie9"; color: Theme.primary; spinning: true; spinDuration: 900
+            MorphShape { width: 16; height: 16; shape: "cookie9"; color: Theme.primary; spinning: ember.busy; spinDuration: 900
                          anchors.verticalCenter: parent.verticalCenter }
             Text { text: "Applying"; color: Theme.inverseOnSurface; font.family: Theme.font; font.pixelSize: 13
                    font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }

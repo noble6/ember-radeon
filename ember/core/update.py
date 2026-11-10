@@ -1,10 +1,16 @@
 """Release checks and safe unpacking, shared by the app and the root updater.
 
-Releases come from GitHub. Each release carries `ember-radeon-<version>.tar.gz`
-and a matching `.sha256`; an update is only installed when the download matches.
+Releases come from GitHub. Each release carries `ember-radeon-<version>.tar.gz`,
+a `.sha256` and a `.sig`. An update is installed only when the tarball carries a
+valid Ed25519 signature from a release key built into this file. The checksum
+catches broken downloads; the signature is what establishes trust, because the
+signing key is never stored on GitHub: taking over the repository or the account
+is not enough to push code to existing installs.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -15,7 +21,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from ember.core import ed25519
+
 REPO = "noble6/ember-radeon"
+# Ed25519 public keys (base64) allowed to sign releases. More than one allows key rotation:
+# ship the new key in a release signed by the old one, then start signing with the new key.
+RELEASE_KEYS = ("VKBEK2AP/+pXWzjdnTDD/DRf6RVIcJ454/1S+hGyVvs=",)
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 USER_AGENT = "ember-updater"
@@ -24,6 +35,7 @@ STATE_DIR = Path(os.environ.get("EMBER_STATE_DIR", "/var/lib/ember"))
 SETTINGS = STATE_DIR / "update.json"           # {"auto": bool}, written by emberd
 STATUS = STATE_DIR / "update-status.json"      # written by the updater, read by the app
 RETRY_DELAY = 5.0                              # seconds; grows with each retry
+MAX_DOWNLOAD = 64 * 1024 * 1024                # a release is about 1 MB; refuse anything absurd
 
 
 class UpdateError(RuntimeError):
@@ -70,7 +82,10 @@ def _get(url: str, timeout: float = 20.0, accept: str = "application/vnd.github+
     for attempt in range(4):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:   # verifies TLS certificates
-                return r.read()
+                data = r.read(MAX_DOWNLOAD + 1)
+            if len(data) > MAX_DOWNLOAD:
+                raise UpdateError("download is larger than any Ember release should be")
+            return data
         except urllib.error.HTTPError as e:
             last = e
             if e.code < 500 and e.code != 429:   # 4xx won't fix itself; 5xx and rate limits might
@@ -98,6 +113,7 @@ def parse_release(data: dict) -> dict:
         "published": data.get("published_at"),
         "tarball": assets.get(tar_name),
         "checksum": assets.get(tar_name + ".sha256"),
+        "signature": assets.get(tar_name + ".sig"),
         "prerelease": bool(data.get("prerelease")),
         "draft": bool(data.get("draft")),
     }
@@ -132,6 +148,28 @@ def verify(blob: bytes, checksum_text: str, name: str) -> None:
     got = hashlib.sha256(blob).hexdigest()
     if got.lower() != m.group(1).lower():
         raise UpdateError(f"checksum mismatch for {name}")
+
+
+def verify_signature(blob: bytes, sig: bytes, keys=None) -> None:
+    """Raise unless `sig` is a valid signature of `blob` by one of the release keys.
+    `sig` is the 64 raw bytes, or their base64 text."""
+    keys = RELEASE_KEYS if keys is None else keys
+    raw = sig
+    if len(raw) != 64:
+        try:
+            raw = base64.b64decode(sig.strip(), validate=True)
+        except (binascii.Error, ValueError):
+            raw = b""
+    if len(raw) != 64:
+        raise UpdateError("release signature is malformed")
+    for k in keys:
+        try:
+            pub = base64.b64decode(k, validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if ed25519.verify(pub, blob, raw):
+            return
+    raise UpdateError("release signature does not match a trusted key")
 
 
 def safe_extract(archive: Path, dest: Path) -> Path:

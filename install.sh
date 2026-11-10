@@ -21,7 +21,7 @@ if [[ " $* " == *" --uninstall "* ]]; then
         /etc/systemd/system/ember-update-now.service /etc/systemd/system/ember-update.timer \
         /etc/polkit-1/rules.d/50-ember-update.rules
   systemctl daemon-reload
-  rm -rf "$LIB" "$PREFIX/bin/ember" "$PREFIX/bin/ember-run" \
+  rm -rf "$LIB" "$LIB.new" "$LIB.old" "$PREFIX/bin/ember" "$PREFIX/bin/ember-run" \
          "$PREFIX/share/applications/ember.desktop" "$PREFIX/share/icons/hicolor/scalable/apps/ember.svg"
   echo "Ember removed. Kept /etc/ember, /var/lib/ember and /etc/modprobe.d/ember-overdrive.conf (if any)."
   exit 0
@@ -40,8 +40,11 @@ install -m 755 "$SRC/bin/ember-run" "$LIB.new/bin/ember-run"
 find "$LIB.new" -name __pycache__ -prune -exec rm -rf {} +
 chown -R root:root "$LIB.new"
 chmod -R go-w "$LIB.new"
-rm -rf "$LIB"
+# Swap with two renames, so there is no moment in which Ember is missing.
+rm -rf "$LIB.old"
+if [[ -e "$LIB" ]]; then mv "$LIB" "$LIB.old"; fi
 mv "$LIB.new" "$LIB"
+rm -rf "$LIB.old"
 chmod 755 "$LIB/packaging/ember-overdrive"
 
 cat > "$PREFIX/bin/ember" <<EOS

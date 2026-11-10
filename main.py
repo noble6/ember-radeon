@@ -20,7 +20,21 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon  # noqa: E402
 
 from ember.app.backend import Backend  # noqa: E402
 
-APP_ID = f"ember-{os.getuid()}"
+def _server_name() -> str:
+    """Single-instance socket. Lives in the user's private runtime dir when there is one:
+    a name in /tmp could be squatted by another local user to keep Ember from starting."""
+    rt = os.environ.get("XDG_RUNTIME_DIR")
+    if rt and os.path.isdir(rt):
+        d = Path(rt) / "ember"
+        try:
+            d.mkdir(mode=0o700, exist_ok=True)
+            return str(d / "app.sock")
+        except OSError:
+            pass
+    return f"ember-{os.getuid()}"
+
+
+APP_ID = _server_name()
 PAGES = ["home", "metrics", "tuning", "gaming", "record", "display", "system", "settings"]
 
 
@@ -67,6 +81,7 @@ def main() -> int:
     if not shot_dir and already_running():
         return 0
     server = QLocalServer()
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)   # only this user may connect
     QLocalServer.removeServer(APP_ID)
     server.listen(APP_ID)
 
@@ -103,6 +118,7 @@ def main() -> int:
             else:
                 show()
         c.readyRead.connect(read)
+        c.disconnected.connect(c.deleteLater)     # one socket object per `ember` call: don't keep them
     server.newConnection.connect(on_conn)
 
     tray = None
@@ -141,9 +157,18 @@ def main() -> int:
         menu.addSeparator()
         menu.addAction("Quit", app.quit)
         backend.daemonChanged.connect(rebuild)
-        backend.tick.connect(lambda: tray.setToolTip(
-            f"Ember · {backend.runtime.get('applied') or 'Stock'} · "
-            f"{(backend.snap.get('temp_junction') or 0):.0f}°C · {(backend.snap.get('power_w') or 0):.0f} W"))
+        tip = {"text": ""}
+
+        def tooltip():
+            # Every tray update is a D-Bus message to the desktop shell: send one only when the text changes.
+            snap = backend.snap
+            text = (f"Ember · {backend.runtime.get('applied') or 'Stock'} · "
+                    f"{(snap.get('temp_junction') or 0):.0f}°C · {(snap.get('power_w') or 0):.0f} W")
+            if text != tip["text"]:
+                tip["text"] = text
+                tray.setToolTip(text)
+        tip_timer = QTimer(interval=5000, timeout=tooltip)
+        tip_timer.start()
         rebuild()
         backend.gameStarted.connect(lambda title, body: tray.showMessage(
             title, body, app.windowIcon(), 6000) if backend.settings.get("notify_games", True) else None)
@@ -156,6 +181,9 @@ def main() -> int:
 
     if not hidden or tray is None:
         show()
+    # In the tray, the backend drops to a slow heartbeat and QML stops animating.
+    win.visibleChanged.connect(backend.setUiVisible)     # the signal carries the new state
+    backend.setUiVisible(win.isVisible())
 
     def restart_into_update(forced=False):
         """After a background update, quietly restart into the new version while the
@@ -178,7 +206,7 @@ def main() -> int:
     app.aboutToQuit.connect(backend.shutdown)
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     signal.signal(signal.SIGTERM, lambda *_: app.quit())
-    keepalive = QTimer(interval=250, timeout=lambda: None)
+    keepalive = QTimer(interval=500, timeout=lambda: None)   # lets Python see SIGINT/SIGTERM
     keepalive.start()
 
     if shot_dir:

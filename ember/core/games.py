@@ -388,6 +388,11 @@ def set_steam_launch_option(appid: str, enable: bool) -> str:
             raise RuntimeError("refusing to write: patch verification failed")
         backup = lc.with_name(f"localconfig.vdf.ember-{int(time.time())}.bak")
         shutil.copy2(lc, backup)
+        for old in sorted(lc.parent.glob("localconfig.vdf.ember-*.bak"))[:-3]:   # keep the newest three
+            try:
+                old.unlink()
+            except OSError:
+                pass
         tmp = lc.with_suffix(".vdf.ember-tmp")
         tmp.write_text(patched, errors="surrogateescape")
         os.replace(tmp, lc)
@@ -485,6 +490,10 @@ def mangohud_lines(gfx: dict, banner: list[str] | None = None) -> list[str] | No
     if fps > 0:
         lines += [f"fps_limit={fps}", "fps_limit_method=late"]
     if banner:
+        # One config line per message: a stray newline or control character in a game or
+        # file name must not be able to add MangoHud options of its own.
+        banner = [re.sub(r"[\x00-\x1f\x7f]+", " ", str(b)).strip() for b in banner]
+        banner = [b for b in banner if b] or ["EMBER"]
         lines += ["legacy_layout=0", "position=top-center", "font_size=22", "round_corners=14",
                   "background_alpha=0.82", "background_color=1A0A0E", "text_color=FFFFFF",
                   "hud_no_margin", f"custom_text_center={banner[0]}"]

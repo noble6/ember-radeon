@@ -82,7 +82,7 @@ def _num(v, lo, hi, name, integer=False):
         f = float(v)
     except (TypeError, ValueError):
         raise InvalidSettings(f"{name}: not a number")
-    if f != f:  # NaN
+    if f != f or f in (float("inf"), float("-inf")):
         raise InvalidSettings(f"{name}: not a number")
     if lo is not None:
         f = max(lo, f)
@@ -154,7 +154,9 @@ def validate(settings: dict, tuning_state: dict) -> dict:
         clean_fw = {}
         for k, v in fw.items():
             if k in avail and v is not None:
-                rng = avail[k].get("range") or [None, None]
+                rng = avail[k].get("range")
+                if not rng or rng[0] is None or rng[1] is None:
+                    continue   # the driver did not report limits: don't guess
                 clean_fw[k] = _num(v, rng[0], rng[1], f"fan.fw.{k}", True)
         out["fan"]["fw"] = clean_fw
 
@@ -192,6 +194,19 @@ def fan_target(curve: list, temp: float) -> float:
                 return float(p1)
             return p0 + (p1 - p0) * (temp - t0) / (t1 - t0)
     return float(curve[-1][1])
+
+
+def safety_floor(margin: float | None, start: float = 20.0, emergency: float = 5.0) -> float:
+    """Minimum fan speed (%) given how many degrees are left before a critical temperature.
+
+    0 while there is plenty of headroom, 40% once `start` degrees remain, rising to
+    100% at `emergency` degrees. Applied on top of any fixed speed or curve.
+    """
+    if margin is None or margin >= start:
+        return 0.0
+    if margin <= emergency:
+        return 100.0
+    return 40.0 + (start - margin) / (start - emergency) * 60.0
 
 
 def resample_curve(curve: list, n: int, lo: int = 25, hi: int = 100) -> list:

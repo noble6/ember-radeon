@@ -21,7 +21,7 @@ Flickable {
                 id: ap
                 x: 24; y: 24; width: parent.width - 48
                 spacing: 16
-                Label { text: "Appearance"; role: "titleL"; emphasized: true }
+                CardTitle { icon: "palette"; text: "Appearance" }
                 ButtonGroup {
                     width: 320; itemHeight: 44
                     model: [{ key: "dark", label: "Dark", icon: "moon" }, { key: "light", label: "Light", icon: "light" }]
@@ -58,7 +58,7 @@ Flickable {
                 id: bh
                 x: 24; y: 24; width: parent.width - 48
                 spacing: 8
-                Label { text: "Behaviour"; role: "titleL"; emphasized: true; bottomPadding: 8 }
+                CardTitle { icon: "settings"; text: "Behaviour"; bottomPadding: 8 }
                 SwitchRow { width: parent.width; icon: "power"; title: "Start with the desktop"
                             subtitle: "Opens hidden in the tray so profiles are one right-click away. Tuning itself never needs the app open."
                             checked: !!page.cfg.autostart; onToggled: (on) => ember.setSetting("autostart", on) }
@@ -87,7 +87,7 @@ Flickable {
                 id: sv
                 x: 24; y: 24; width: parent.width - 48
                 spacing: 8
-                Label { text: "Ember service"; role: "titleL"; emphasized: true; bottomPadding: 8 }
+                CardTitle { icon: "shield"; text: "Ember service"; bottomPadding: 8 }
                 InfoRow {
                     label: "Last checked"
                     value: {
@@ -120,8 +120,7 @@ Flickable {
                 Item {
                     width: parent.width; height: 40
                     Row { spacing: 12; anchors.verticalCenter: parent.verticalCenter
-                        Icon { name: "download"; size: 24; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        Label { text: "Updates"; role: "titleL"; emphasized: true } }
+                        CardTitle { icon: "download"; text: "Updates" } }
                     Row {
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 8
                         Btn { text: up.u.checking ? "Checking…" : "Check now"; icon: "refresh"; variant: "text"
@@ -173,7 +172,7 @@ Flickable {
                 id: ab
                 x: 24; y: 24; width: parent.width - 48
                 spacing: 6
-                Label { text: "About Ember"; role: "titleL"; emphasized: true }
+                CardTitle { icon: "info"; text: "About Ember" }
                 Label { width: parent.width; wrapMode: Text.WordWrap; role: "body"; color: Theme.inkVariant
                         text: "An open-source GPU control center for AMD Radeon on Linux. Ember talks to the amdgpu kernel driver through its documented sysfs interface and to Mesa’s Vulkan layers - the same open stack AMD and the community maintain. Not affiliated with AMD." }
             }

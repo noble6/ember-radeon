@@ -118,7 +118,7 @@ Flickable {
                                 Behavior on color { ColorAnimation { duration: Theme.fast } }
                                 Image { id: ti; x: 12; anchors.verticalCenter: parent.verticalCenter; width: 40; height: 40
                                         sourceSize.width: 80; sourceSize.height: 80; fillMode: Image.PreserveAspectFit
-                                        asynchronous: true; source: tile.modelData.icon ? "file://" + tile.modelData.icon : ""
+                                        asynchronous: true; source: F.fileUrl(tile.modelData.icon)
                                         visible: status === Image.Ready }
                                 Icon { visible: ti.status !== Image.Ready; x: 20; anchors.verticalCenter: parent.verticalCenter
                                        name: "game"; size: 24; color: Theme.primary }
@@ -181,14 +181,15 @@ Flickable {
                     RoundedImage {
                         anchors.fill: parent
                         radius: art.r
-                        source: cover.modelData.cover ? "file://" + cover.modelData.cover : ""
+                        sourceSize.height: 480        // shown at 168x236: don't keep full-size art in memory
+                        source: F.fileUrl(cover.modelData.cover)
                     }
                     Column {
                         visible: !cover.modelData.cover
                         anchors.centerIn: parent; width: parent.width - 24; spacing: 12
                         Image { id: ci; visible: status === Image.Ready; width: 96; height: 96; anchors.horizontalCenter: parent.horizontalCenter
                                 sourceSize.width: 192; sourceSize.height: 192; fillMode: Image.PreserveAspectFit; asynchronous: true
-                                source: cover.modelData.icon ? "file://" + cover.modelData.icon : "" }
+                                source: F.fileUrl(cover.modelData.icon) }
                         Icon { visible: ci.status !== Image.Ready; name: "game"; size: 40; color: Theme.primary; anchors.horizontalCenter: parent.horizontalCenter }
                         Label { text: cover.modelData.name; role: "titleS"; width: parent.width; horizontalAlignment: Text.AlignHCenter
                                 wrapMode: Text.WordWrap; maximumLineCount: 3; elide: Text.ElideRight }
@@ -208,7 +209,7 @@ Flickable {
                         height: 26; radius: 13; width: np.implicitWidth + 30
                         color: Theme.good
                         Rectangle { width: 8; height: 8; radius: 4; color: "#0B2A1C"; x: 10; anchors.verticalCenter: parent.verticalCenter
-                                    SequentialAnimation on opacity { loops: Animation.Infinite; running: parent.parent.visible
+                                    SequentialAnimation on opacity { loops: Animation.Infinite; running: parent.parent.visible && ember.uiVisible
                                         NumberAnimation { to: 0.2; duration: 600 } NumberAnimation { to: 1; duration: 600 } } }
                         Label { id: np; x: 22; anchors.verticalCenter: parent.verticalCenter; text: "Playing"; role: "labelS"
                                 color: "#0B2A1C"; emphasized: true }
@@ -241,10 +242,10 @@ Flickable {
                 spacing: 16
                 Card {
                     width: parent.width; height: 220; radius: 28
-                    RoundedImage { anchors.fill: parent; radius: 28; opacity: 0.85
-                                   source: page.sel && page.sel.hero ? "file://" + page.sel.hero : "" }
+                    RoundedImage { anchors.fill: parent; radius: 28; opacity: 0.85; sourceSize.width: 1400
+                                   source: F.fileUrl(page.sel ? page.sel.hero : "") }
                     Image { visible: !!(page.sel && !page.sel.hero && page.sel.icon)
-                            source: page.sel && page.sel.icon ? "file://" + page.sel.icon : ""
+                            source: F.fileUrl(page.sel ? page.sel.icon : "")
                             anchors.right: parent.right; anchors.rightMargin: 32; anchors.verticalCenter: parent.verticalCenter
                             anchors.verticalCenterOffset: -16
                             width: 120; height: 120; sourceSize.width: 240; sourceSize.height: 240
@@ -252,7 +253,7 @@ Flickable {
                     Rectangle { anchors.fill: parent; radius: 28
                                 gradient: Gradient { GradientStop { position: 0.3; color: "transparent" }
                                                      GradientStop { position: 1.0; color: Theme.alpha("#000000", 0.75) } } }
-                    Image { visible: !!(page.sel && page.sel.logo); source: page.sel && page.sel.logo ? "file://" + page.sel.logo : ""
+                    Image { visible: !!(page.sel && page.sel.logo); source: F.fileUrl(page.sel ? page.sel.logo : "")
                             x: 24; anchors.bottom: parent.bottom; anchors.bottomMargin: 20
                             width: Math.min(parent.width * 0.6, sourceSize.width); height: 70
                             fillMode: Image.PreserveAspectFit; horizontalAlignment: Image.AlignLeft; asynchronous: true }
@@ -334,8 +335,8 @@ Flickable {
                     x: 24; y: 20; width: parent.width - 48
                     spacing: 8
                     Item {
-                        width: parent.width; height: 32
-                        Label { text: "Graphics"; role: "titleL"; emphasized: true; anchors.verticalCenter: parent.verticalCenter }
+                        width: parent.width; height: 40
+                        CardTitle { icon: "sparkle"; text: "Graphics"; anchors.verticalCenter: parent.verticalCenter }
                         Row {
                             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 12
                             Label { text: "Use global settings"; role: "labelL"; color: Theme.inkVariant; anchors.verticalCenter: parent.verticalCenter }

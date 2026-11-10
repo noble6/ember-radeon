@@ -31,7 +31,14 @@ STATE_DIR = Path(os.environ.get("EMBER_STATE_DIR", "/var/lib/ember"))
 CONF = Path(os.environ.get("EMBER_CONF", "/etc/ember/emberd.conf"))
 PROC = G.SYSFS_ROOT / "proc"
 BOOT_GRACE_S = 90          # OD applied at boot must survive this long to be trusted next boot
-EMERGENCY_MARGIN_C = 5     # fans to 100% this close to the junction critical temp
+EMERGENCY_MARGIN_C = 5     # fans to 100% this close to a sensor's critical temperature
+SAFETY_MARGIN_C = 20       # from here on a minimum fan speed applies, whatever the profile says
+SENSOR_FAILS_MAX = 3       # unreadable temperature this many ticks in a row: fan goes back to automatic
+MAX_REQUEST = 256 * 1024   # bytes per request line
+MAX_CLIENTS = 32           # concurrent connections, total
+MAX_CLIENTS_PER_UID = 8
+CLIENT_TIMEOUT_S = 30      # idle connections are dropped
+MAX_PROFILES = 64
 
 log = logging.getLogger("emberd")
 
@@ -61,7 +68,26 @@ class Controller:
         self._last_pwm_pct: float | None = None
         self._last_temp: float | None = None
         self._fan_cfg: dict | None = None
+        self._sensor_fails = 0
+        self.fan_fault: str | None = None      # why the fan was handed back to the firmware
         self.od_stock: dict | None = None     # pp_od_clk_voltage as first seen (factory values)
+
+    # A marker on disk records that we hold the fan in manual mode, so that a crashed
+    # or killed daemon can still be cleaned up after (see recover_fans).
+    @property
+    def _fan_marker(self) -> Path:
+        return STATE_DIR / f"fan-{re.sub(r'[^0-9A-Za-z._-]', '_', self.key)}.owned"
+
+    def _own_fan(self, owned: bool) -> None:
+        self.fan_owned = owned
+        try:
+            if owned:
+                STATE_DIR.mkdir(parents=True, exist_ok=True)
+                self._fan_marker.write_text("1")
+            else:
+                self._fan_marker.unlink(missing_ok=True)
+        except OSError as e:
+            log.debug("fan marker: %s", e)
 
     @property
     def key(self) -> str:
@@ -107,6 +133,8 @@ class Controller:
             return
         if od == previous and od is not None:
             return
+        if od is None and previous is None and self.applied is not None:
+            return   # no overdrive before, none now: leave the table alone
         table = G.parse_od(G.read(path))
         if table["family"] == "states":
             # Polaris/Vega10 only accept table edits in manual mode; the perf-level
@@ -153,8 +181,10 @@ class Controller:
         return True
 
     def _fan(self, fan: dict) -> None:
+        self.fan_fault = None
+        self._sensor_fails = 0
         if self._fan_firmware_curve(fan):
-            self.fan_owned = False
+            self._own_fan(False)
             return
         h = self.gpu.hwmon
         if not h or not (h / "pwm1_enable").exists():
@@ -164,12 +194,16 @@ class Controller:
         if fan["mode"] == "auto":
             if self.fan_owned or G.read_int(h / "pwm1_enable") != 2:
                 write(h / "pwm1_enable", "2")
-            self.fan_owned = False
+            self._own_fan(False)
             self._last_pwm_pct = None
         else:
-            write(h / "pwm1_enable", "1")
+            self._own_fan(True)            # marker first: a crash right after must still be cleaned up
+            try:
+                write(h / "pwm1_enable", "1")
+            except ApplyError:
+                self._own_fan(False)
+                raise
             self._fan_cfg = fan
-            self.fan_owned = True
             self._last_pwm_pct = None
             self.fan_tick(force=True)
 
@@ -200,7 +234,7 @@ class Controller:
     def drifted(self) -> bool:
         """True if the hardware no longer matches what we applied (e.g. after resume)."""
         a = self.applied
-        if not a:
+        if not a or self.gpu.asleep():
             return False
         if G.read(self.gpu.dev / "power_dpm_force_performance_level") != a["perf_level"]:
             return True
@@ -247,24 +281,43 @@ class Controller:
                 write(h / "pwm1_enable", "2")
             except ApplyError as e:
                 log.error("could not return fan to auto: %s", e)
-        self.fan_owned = False
+        self._own_fan(False)
+
+    def fail_safe(self, why: str) -> None:
+        """Something is wrong with manual fan control: give the fan back to the firmware."""
+        if self.fan_owned:
+            log.error("%s: %s; returning the fan to automatic control", self.key, why)
+            self.release_fan()
+            self.fan_fault = why
 
     def fan_tick(self, force: bool = False) -> None:
         fan = self._fan_cfg
-        if not self.fan_owned or not fan:
-            return
         h = self.gpu.hwmon
-        temps = self.gpu.temps()
-        temp = temps.get(fan["sensor"]) or temps.get("junction") or temps.get("edge")
-        if temp is None:
+        if not self.fan_owned or not fan or not h:
             return
-        crit = (G.read_int(h / "temp2_crit") or 110000) / 1000
-        if temp >= crit - EMERGENCY_MARGIN_C:
-            pct = 100.0
-        elif fan["mode"] == "fixed":
+        if self.gpu.asleep():
+            return   # powered-down laptop GPU: reading sensors would wake it, and its fan is off anyway
+        temps = self.gpu.temps()
+        temp = temps.get(fan["sensor"])
+        if temp is None:
+            temp = temps.get("junction", temps.get("edge"))
+        if temp is None:
+            self._sensor_fails += 1
+            if self._sensor_fails >= SENSOR_FAILS_MAX:
+                self.fail_safe("temperature sensor is not readable")
+            return
+        self._sensor_fails = 0
+        if fan["mode"] == "fixed":
             pct = float(fan["fixed_pct"])
         else:
             pct = T.fan_target(fan["curve"], temp)
+        # Safety floor: close to any sensor's critical temperature the fan speeds up no matter
+        # what the profile asks for, reaching 100% just before the limit.
+        margin = self.gpu.thermal_margin(temps)
+        floor = T.safety_floor(margin, SAFETY_MARGIN_C, EMERGENCY_MARGIN_C)
+        if floor > pct:
+            pct = floor
+        elif fan["mode"] == "curve":
             # Hysteresis: only slow down once the temperature has really dropped.
             if (not force and self._last_pwm_pct is not None and pct < self._last_pwm_pct
                     and self._last_temp is not None and temp > self._last_temp - fan["hysteresis"]):
@@ -325,14 +378,45 @@ def match_rule(rules: list[dict], appids: set[str], exes: set[str]) -> dict | No
 
 # ---------------------------------------------------------------- the daemon
 
+def boot_id() -> str | None:
+    """Changes on every boot; lets us tell a service restart from a fresh boot."""
+    return G.read(PROC / "sys" / "kernel" / "random" / "boot_id")
+
+
+def recover_fans(gpus: list[G.Gpu]) -> int:
+    """Hand back every fan a previous instance left in manual mode (crash, kill, power cut).
+    Also what `emberd --release-fans` runs when systemd stops the service."""
+    n = 0
+    for g in gpus:
+        c = Controller(g)
+        if not c._fan_marker.exists():
+            continue
+        h = g.hwmon
+        try:
+            if h and G.read_int(h / "pwm1_enable") == 1:
+                write(h / "pwm1_enable", "2")
+                n += 1
+                log.warning("%s: fan was left in manual mode; returned to automatic", c.key)
+        except ApplyError as e:
+            log.error("%s: could not return fan to automatic: %s", c.key, e)
+        try:
+            c._fan_marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return n
+
+
 class Daemon:
     def __init__(self):
         self.lock = threading.RLock()
-        self.ctl: dict[str, Controller] = {g.pci_slot: Controller(g) for g in G.find_gpus()}
+        gpus = G.find_gpus()
+        recover_fans(gpus)
+        self.ctl: dict[str, Controller] = {g.pci_slot: Controller(g) for g in gpus}
         self.state = self._load()
         self.runtime: dict[str, dict] = {k: {"applied": None, "reason": None, "game": None, "error": None}
                                          for k in self.ctl}
         self.boot_skipped = False
+        self._last_scan = self._last_drift = 0.0
         self.stop = threading.Event()
         self.conf = self._load_conf()
         for k, c in self.ctl.items():
@@ -429,7 +513,7 @@ class Daemon:
                 rt["error"] = None
             except (ApplyError, T.InvalidSettings) as e:
                 rt["error"] = str(e)
-            rt.update(applied=name, reason=reason, game=game)
+            rt.update(applied=name, reason=reason, game=game, fan_fault=None)
             log.info("%s: profile=%s (%s%s)%s", key, name or "stock", reason,
                      f": {game}" if game else "", f" ERROR {rt['error']}" if rt["error"] else "")
 
@@ -450,9 +534,13 @@ class Daemon:
         with self.lock:
             g = self._gpu_state(key)
             if cmd == "save_profile":
-                name = str(req.get("name", "")).strip()
-                if not name or len(name) > 40:
+                name = req.get("name")
+                if not isinstance(name, str) or not name.strip() or len(name.strip()) > 40 \
+                        or any(ord(ch) < 32 for ch in name):
                     raise ValueError("profile name must be 1-40 characters")
+                name = name.strip()
+                if name not in g["profiles"] and len(g["profiles"]) >= MAX_PROFILES:
+                    raise ValueError(f"at most {MAX_PROFILES} profiles")
                 clean = T.validate(req.get("settings"), self.ctl[key].state())
                 g["profiles"][name] = clean
                 if req.get("activate"):
@@ -462,6 +550,8 @@ class Daemon:
                     self.reconcile(key, force=True)
             elif cmd == "delete_profile":
                 name = req.get("name")
+                if not isinstance(name, str):
+                    raise ValueError("profile name must be text")
                 g["profiles"].pop(name, None)
                 if g["active"] == name:
                     g["active"] = None
@@ -470,7 +560,7 @@ class Daemon:
                 self.reconcile(key)
             elif cmd == "activate":
                 name = req.get("name")
-                if name is not None and name not in g["profiles"]:
+                if name is not None and (not isinstance(name, str) or name not in g["profiles"]):
                     raise ValueError(f"no profile {name!r}")
                 g["active"] = name
                 self._save()
@@ -481,6 +571,8 @@ class Daemon:
                     raise ValueError("rules must be a list")
                 clean = []
                 for r in rules[:500]:
+                    if not isinstance(r, dict):
+                        continue
                     m = str(r.get("match", ""))
                     if not re.fullmatch(r"(steam:\d{1,12}|exe:[^/\x00]{1,128})", m):
                         continue
@@ -513,6 +605,18 @@ class Daemon:
 
     # -- lifecycle
     def boot(self) -> None:
+        bid = boot_id()
+        restarted = bid is not None and self.state.get("boot_id") == bid
+        self.state["boot_id"] = bid
+        if restarted:
+            # Same boot: the service was restarted (an update, a crash). Put the active
+            # profile back instead of silently dropping to stock.
+            log.info("service restart within the same boot: restoring active profiles")
+            for key in self.ctl:
+                if self._gpu_state(key)["active"] is not None:
+                    self.reconcile(key, force=True)
+            self._save()
+            return
         marker = STATE_DIR / "applying"
         crashed = marker.exists()
         if crashed:
@@ -528,9 +632,10 @@ class Daemon:
         if any_od and not crashed:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             marker.write_text(str(time.time()))
-            threading.Timer(BOOT_GRACE_S, lambda: marker.unlink(missing_ok=True)).start()
-        elif crashed:
-            threading.Timer(BOOT_GRACE_S, lambda: marker.unlink(missing_ok=True)).start()
+        if any_od or crashed:
+            t = threading.Timer(BOOT_GRACE_S, lambda: marker.unlink(missing_ok=True))
+            t.daemon = True     # never hold up a shutdown
+            t.start()
         for key in self.ctl:
             g = self._gpu_state(key)
             if not g["apply_on_boot"]:
@@ -541,30 +646,53 @@ class Daemon:
         self._save()
 
     def loop(self) -> None:
-        last_scan = last_drift = 0.0
+        failures = 0
         while not self.stop.wait(1.0):
-            with self.lock:
-                for c in self.ctl.values():
-                    c.fan_tick()
-            now = time.monotonic()
-            if now - last_drift >= 5.0:
-                last_drift = now
-                for key, c in self.ctl.items():
+            try:
+                self._tick()
+                failures = 0
+            except Exception:  # the control loop must outlive any single bad read
+                failures += 1
+                if failures in (1, 10) or failures % 300 == 0:
+                    log.exception("control loop error (%d in a row)", failures)
+                if failures >= 3:
+                    # Don't leave a fan at a stale fixed speed while we can't regulate it.
                     with self.lock:
-                        if c.drifted():
-                            log.info("%s: settings were reset (resume?), re-applying", key)
-                            c.applied = None  # force OD rewrite too
-                            self.reconcile(key, force=True)
-            if now - last_scan >= 2.0:
-                last_scan = now
-                if any(self._gpu_state(k)["rules"] for k in self.ctl):
-                    appids, exes = running_games()
-                    for key in self.ctl:
-                        rule = match_rule(self._gpu_state(key)["rules"], appids, exes)
-                        with self.lock:
-                            if rule != self.runtime[key].get("game_rule"):
-                                self.runtime[key]["game_rule"] = rule
-                                self.reconcile(key)
+                        for key, c in self.ctl.items():
+                            c.fail_safe("control loop keeps failing")
+                            self._note_fan_fault(key, c)
+
+    def _note_fan_fault(self, key: str, c: Controller) -> None:
+        if c.fan_fault and self.runtime[key].get("fan_fault") != c.fan_fault:
+            self.runtime[key]["fan_fault"] = c.fan_fault
+            self.runtime[key]["error"] = f"fan: {c.fan_fault}; the firmware controls the fan now"
+
+    def _tick(self) -> None:
+        with self.lock:
+            for key, c in self.ctl.items():
+                c.fan_tick()
+                self._note_fan_fault(key, c)
+        now = time.monotonic()
+        if now - self._last_drift >= 5.0:
+            self._last_drift = now
+            for key, c in self.ctl.items():
+                with self.lock:
+                    if c.drifted():
+                        log.info("%s: settings were reset (resume?), re-applying", key)
+                        c.applied = None  # force OD rewrite too
+                        self.reconcile(key, force=True)
+        if now - self._last_scan >= 2.0:
+            self._last_scan = now
+            with self.lock:
+                rules = {k: list(self._gpu_state(k)["rules"]) for k in self.ctl}
+            if any(rules.values()):
+                appids, exes = running_games()
+                for key in self.ctl:
+                    rule = match_rule(rules[key], appids, exes)
+                    with self.lock:
+                        if rule != self.runtime[key].get("game_rule"):
+                            self.runtime[key]["game_rule"] = rule
+                            self.reconcile(key)
 
     def shutdown(self) -> None:
         self.stop.set()
@@ -573,14 +701,29 @@ class Daemon:
                 c.release_fan()
 
 
+def peer_uid(sock: socket.socket) -> int:
+    creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    return struct.unpack("3i", creds)[1]
+
+
 class Handler(socketserver.StreamRequestHandler):
     daemon_ref: Daemon
+    timeout = CLIENT_TIMEOUT_S        # applied to the socket: idle clients can't pin a thread
 
     def handle(self):
-        creds = self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-        _pid, uid, _gid = struct.unpack("3i", creds)
-        for line in self.rfile:
-            if len(line) > 256 * 1024:
+        uid = peer_uid(self.request)
+        while True:
+            try:
+                line = self.rfile.readline(MAX_REQUEST + 1)   # bounded: never buffer an endless line
+            except OSError:
+                break                                          # timed out or went away
+            if not line:
+                break
+            if len(line) > MAX_REQUEST or not line.endswith(b"\n"):
+                try:
+                    self.wfile.write(b'{"ok": false, "error": "request too large"}\n')
+                except OSError:
+                    pass
                 break
             try:
                 req = json.loads(line)
@@ -592,17 +735,71 @@ class Handler(socketserver.StreamRequestHandler):
             except Exception as e:  # never let one bad request kill the daemon
                 log.exception("request failed")
                 resp = {"ok": False, "error": f"internal error: {e}"}
-            self.wfile.write(json.dumps(resp).encode() + b"\n")
-            self.wfile.flush()
+            try:
+                self.wfile.write(json.dumps(resp).encode() + b"\n")
+                self.wfile.flush()
+            except OSError:
+                break
 
 
 class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """One thread per client, with a ceiling on clients overall and per user so that
+    nobody can exhaust the daemon by opening connections and going quiet."""
     daemon_threads = True
+    request_queue_size = 16
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._clients_lock = threading.Lock()
+        self._clients: dict[int, int] = {}
+
+    def process_request(self, request, client_address):
+        try:
+            uid = peer_uid(request)
+        except OSError:
+            self.shutdown_request(request)
+            return
+        with self._clients_lock:
+            if sum(self._clients.values()) >= MAX_CLIENTS or self._clients.get(uid, 0) >= MAX_CLIENTS_PER_UID:
+                busy = True
+            else:
+                busy = False
+                self._clients[uid] = self._clients.get(uid, 0) + 1
+        if busy:
+            try:
+                request.sendall(b'{"ok": false, "error": "too many connections"}\n')
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            threading.Thread(target=self._serve, args=(request, client_address, uid), daemon=True).start()
+        except RuntimeError:      # out of threads
+            self._done(uid)
+            self.shutdown_request(request)
+
+    def _serve(self, request, client_address, uid):
+        try:
+            self.process_request_thread(request, client_address)   # handles errors and closes the socket
+        finally:
+            self._done(uid)
+
+    def _done(self, uid: int) -> None:
+        with self._clients_lock:
+            left = self._clients.get(uid, 0) - 1
+            if left > 0:
+                self._clients[uid] = left
+            else:
+                self._clients.pop(uid, None)
 
 
 def main() -> int:
     logging.basicConfig(level=os.environ.get("EMBER_LOG", "INFO"),
                         format="%(levelname)s %(message)s", stream=sys.stderr)
+    if "--release-fans" in sys.argv[1:]:
+        # ExecStopPost: runs after the service stopped for any reason, including a crash or SIGKILL.
+        recover_fans(G.find_gpus())
+        return 0
     d = Daemon()
     if not d.ctl:
         log.error("no amdgpu devices found")

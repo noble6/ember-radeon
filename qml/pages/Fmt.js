@@ -15,4 +15,8 @@ function profileBlurb(n) {
               "Balanced": "Default clocks, firmware fans",
               "Performance": "Max power limit, aggressive cooling" })[n] || "Custom profile"
 }
+// Local path -> file URL. Plain "file://" + path breaks on "#", "?" and "%" in folder names.
+function fileUrl(p) {
+    return p ? "file://" + encodeURI(p).replace(/#/g, "%23").replace(/\?/g, "%3F") : ""
+}
 function clone(o) { return JSON.parse(JSON.stringify(o)) }

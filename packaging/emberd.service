@@ -6,8 +6,14 @@ After=systemd-modules-load.service
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 -I /usr/local/lib/ember/emberd.py
+# Runs however the service ended (stop, crash, kill): a fan Ember was driving goes back to the firmware.
+ExecStopPost=/usr/bin/python3 -I /usr/local/lib/ember/emberd.py --release-fans
 Restart=on-failure
 RestartSec=2
+TimeoutStopSec=15
+# Ceilings: the service needs about 25 MB and a handful of threads.
+MemoryMax=256M
+TasksMax=64
 RuntimeDirectory=ember
 StateDirectory=ember
 # It needs to write /sys; everything else is locked down.
@@ -21,6 +27,14 @@ RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+UMask=0022
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
 
 [Install]

@@ -497,7 +497,15 @@ def gpu_processes(pci_slot: str, proc: Path | None = None) -> list[dict]:
         except OSError:
             continue
         clients: dict[str, dict] = {}
+        fd_dir = proc / pid / "fd"
         for fd in fds:
+            # Only DRM device fds can carry GPU stats; checking the link first skips
+            # opening the fdinfo of every socket, pipe and file a process holds.
+            try:
+                if not os.readlink(fd_dir / fd).startswith("/dev/dri/"):
+                    continue
+            except OSError:
+                pass
             try:
                 with open(fdinfo / fd) as fh:
                     text = fh.read(4096)
@@ -533,6 +541,8 @@ def gpu_processes(pci_slot: str, proc: Path | None = None) -> list[dict]:
 
 # ---------------------------------------------------------------- the GPU
 
+DEFAULT_CRIT_C = {"edge": 100.0, "junction": 110.0, "mem": 105.0}   # used when hwmon has no temp*_crit
+
 @dataclass
 class Gpu:
     card: str               # "card1"
@@ -540,6 +550,7 @@ class Gpu:
     hwmon: Path | None
     pci_slot: str
     info: dict = field(default_factory=dict)
+    _crits: dict | None = field(default=None, repr=False, compare=False)
 
     # ---- static info
     def describe(self) -> dict:
@@ -619,6 +630,11 @@ class Gpu:
             "max": self.hw("power1_cap_max", 1e6), "default": self.hw("power1_cap_default", 1e6),
         }
 
+    def asleep(self) -> bool:
+        """True while a laptop's discrete GPU is powered down (runtime suspend).
+        Reading its sensors would wake it up, so callers skip polling."""
+        return read(self.dev / "power" / "runtime_status") == "suspended"
+
     def temps(self) -> dict:
         out = {}
         if not self.hwmon:
@@ -630,9 +646,33 @@ class Gpu:
                 out[label] = val
         return out
 
+    def crit_temps(self) -> dict:
+        """Critical temperature per sensor label (static, so read once)."""
+        if self._crits is None:
+            crits = {}
+            if self.hwmon:
+                for i in range(1, 6):
+                    label = read(self.hwmon / f"temp{i}_label")
+                    crit = self.hw(f"temp{i}_crit", 1000)
+                    if label and crit and 60 <= crit <= 130:
+                        crits[label] = crit
+            self._crits = crits
+        return self._crits
+
+    def thermal_margin(self, temps: dict | None = None) -> float | None:
+        """Degrees left before the closest sensor reaches its critical temperature."""
+        temps = self.temps() if temps is None else temps
+        crits = self.crit_temps()
+        margins = [crits.get(label, DEFAULT_CRIT_C.get(label, 100.0)) - t for label, t in temps.items()]
+        return min(margins) if margins else None
+
     def snapshot(self) -> dict:
         """One telemetry sample. Cheap enough to call at 2-4 Hz."""
         d = self.dev
+        if self.asleep():
+            return {"t": time.time(), "asleep": True, "sclk_levels": [], "mclk_levels": [], "throttle": [],
+                    "fan_mode": "auto", "pcie": "asleep", "busy": 0, "power_w": 0.0, "fan_rpm": 0,
+                    "vram_used": 0, "vram_total": (self.info or {}).get("vram_total") or 0}
         temps = self.temps()
         metrics = {}
         try:

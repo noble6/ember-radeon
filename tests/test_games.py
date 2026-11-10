@@ -117,6 +117,12 @@ class GamesTests(unittest.TestCase):
         env, cmd = GM.build_launch(dict(GM.GRAPHICS_DEFAULTS, banner=False), ["g"], have=lambda n: True, banner=banner)
         self.assertNotIn("MANGOHUD", env)
 
+    def test_hud_text_cannot_inject_config(self):
+        lines = GM.mangohud_lines(dict(GM.GRAPHICS_DEFAULTS), ["EMBER ACTIVE  ·  Evil\nexec=rm -rf ~", "ok\x00\x07"])
+        self.assertFalse(any(l.startswith("exec") for l in lines))
+        self.assertTrue(all("\n" not in l and "\x00" not in l for l in lines))
+        self.assertIn("custom_text_center=EMBER ACTIVE  ·  Evil exec=rm -rf ~", lines)
+
     def test_optiscaler_fsr3(self):
         env, _ = GM.build_launch(dict(GM.GRAPHICS_DEFAULTS, optiscaler=True, opti_fg=True, banner=False), ["g"],
                                  have=lambda n: False)

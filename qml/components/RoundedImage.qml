@@ -30,7 +30,7 @@ Item {
     Image {
         anchors.fill: parent
         visible: !root.shaders
-        source: img.source; fillMode: root.fillMode; asynchronous: true; smooth: true
+        source: root.shaders ? "" : img.source; fillMode: root.fillMode; asynchronous: true; smooth: true
     }
     MultiEffect {
         anchors.fill: parent

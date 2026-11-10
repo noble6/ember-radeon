@@ -14,8 +14,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import Property, QObject, QProcess, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 
 from ember.app import caches
 from ember.app import hotkeys as HK
@@ -31,6 +31,7 @@ from ember.core import gpu as G
 from ember.core import tuning as T
 
 HISTORY = 120  # samples kept per series
+HIDDEN_SAMPLE_MS = 3000   # telemetry pace while Ember sits in the tray (tooltip only)
 SERIES = ("gfx_mhz", "mem_mhz", "temp_edge", "temp_junction", "temp_mem", "power_w", "power_cap_w", "fan_rpm",
           "busy", "mem_busy", "vram_pct")
 SETTINGS_FILE = GM.CONFIG_DIR / "settings.json"
@@ -64,6 +65,7 @@ class Backend(QObject):
     recEvent = Signal(str, str)         # (title, body): clip saved, errors
     updateChanged = Signal()
     restartRequested = Signal()
+    uiVisibleChanged = Signal()
     toast = Signal(str)
     _done = Signal(object, object, object)   # (callback, result, error) marshalled to the GUI thread
 
@@ -81,6 +83,9 @@ class Backend(QObject):
         self._apps: list = []
         self._sys: dict = {}
         self._busy = 0
+        self._ui_visible = True
+        self._pending: set = set()      # periodic jobs still queued or running (never stack them up)
+        self._restart_needed = False
         self._pool = ThreadPoolExecutor(max_workers=2)
         self._settings = self._load_settings()
         self._done.connect(self._on_done)
@@ -139,7 +144,14 @@ class Backend(QObject):
         QTimer.singleShot(1500, self.loadApps)
 
     # ---------------------------------------------------------------- plumbing
-    def _run(self, fn, cb=None, err=None, busy=False):
+    def _run(self, fn, cb=None, err=None, busy=False, key=None, own_thread=False):
+        """Run fn off the GUI thread. `key` marks a periodic job: while one is queued or
+        running, further ones are dropped instead of piling up behind a slow call.
+        `own_thread` is for calls that may block for minutes (a password prompt)."""
+        if key is not None:
+            if key in self._pending:
+                return
+            self._pending.add(key)
         if busy:
             self._busy += 1
             self.busyChanged.emit()
@@ -147,13 +159,20 @@ class Backend(QObject):
         def job():
             try:
                 res = fn()
-                self._done.emit((cb, busy), res, None)
+                self._done.emit((cb, busy, key), res, None)
             except Exception as e:  # noqa: BLE001 - surfaced to the UI
-                self._done.emit((err, busy), None, e)
-        self._pool.submit(job)
+                self._done.emit((err, busy, key), None, e)
+        try:
+            if own_thread:
+                threading.Thread(target=job, daemon=True).start()
+            else:
+                self._pool.submit(job)
+        except RuntimeError:   # pool already shut down (quitting)
+            self._pending.discard(key)
 
     def _on_done(self, cbinfo, res, e):
-        cb, busy = cbinfo
+        cb, busy, key = cbinfo
+        self._pending.discard(key)
         if busy:
             self._busy -= 1
             self.busyChanged.emit()
@@ -164,6 +183,38 @@ class Backend(QObject):
                 self.toast.emit(str(e))
         elif cb:
             cb(res)
+
+    # ---------------------------------------------------------------- pacing
+    @Property(bool, notify=uiVisibleChanged)
+    def uiVisible(self):
+        """False while the window is hidden in the tray: QML stops its animations and
+        the backend drops to a slow heartbeat."""
+        return self._ui_visible
+
+    @Slot(bool)
+    def setUiVisible(self, on):
+        on = bool(on)
+        if on == self._ui_visible:
+            return
+        self._ui_visible = on
+        self._apply_pace()
+        self.uiVisibleChanged.emit()
+        if on:
+            self._sample()
+            self.refreshDaemon()
+            self.refreshProcesses()
+
+    def _apply_pace(self):
+        vis = self._ui_visible
+        fast = vis or self._log_fh is not None      # CSV logging keeps its sampling rate
+        self._timer.setInterval(int(self._settings["interval_ms"]) if fast else HIDDEN_SAMPLE_MS)
+        self._dtimer.setInterval(2000 if vis else 6000)
+        self._gtimer.setInterval(2000 if vis else 3000)
+        self._utimer.setInterval(5000 if vis else 30000)
+        if vis:
+            self._ptimer.start(2000)
+        else:
+            self._ptimer.stop()                     # the per-app table is only ever looked at
 
     # ---------------------------------------------------------------- settings
     def _load_settings(self) -> dict:
@@ -206,7 +257,7 @@ class Backend(QObject):
             self._set_autostart(bool(value))
         if key == "interval_ms":
             self._settings[key] = max(250, min(2000, int(value)))
-            self._timer.setInterval(self._settings[key])
+            self._apply_pace()
         self._save_settings()
         self.settingsChanged.emit()
 
@@ -214,9 +265,10 @@ class Backend(QObject):
         path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "autostart" / "ember.desktop"
         if on:
             path.parent.mkdir(parents=True, exist_ok=True)
-            exe = shutil.which("ember") or f"{sys.executable} {HERE / 'main.py'}"
+            ember = shutil.which("ember")
+            argv = [ember] if ember else [sys.executable, str(HERE / "main.py")]
             path.write_text("[Desktop Entry]\nType=Application\nName=Ember\nIcon=ember\n"
-                            f"Exec={exe} --hidden\nX-GNOME-Autostart-enabled=true\n")
+                            f"Exec={APPS.desktop_exec(argv + ['--hidden'])}\nX-GNOME-Autostart-enabled=true\n")
         else:
             path.unlink(missing_ok=True)
 
@@ -317,7 +369,7 @@ class Backend(QObject):
             if [g["id"] for g in now] != [g["id"] for g in self._playing]:
                 self._playing = now
                 self.playingChanged.emit()
-        self._run(running_games, ok, lambda e: None)
+        self._run(running_games, ok, lambda e: None, key="games")
 
     def _announce(self, g):
         rt = self.runtime
@@ -397,7 +449,9 @@ class Backend(QObject):
             if st.get("state") == "updated" and prev and prev != "updated":
                 self.recEvent.emit("Ember updated", f"Version {st.get('current')} is installed")
             self.updateChanged.emit()
-        if self.updateInfo["restart_needed"]:
+        rn = self.updateInfo["restart_needed"]
+        if rn != self._restart_needed:
+            self._restart_needed = rn
             self.updateChanged.emit()
 
     @Slot()
@@ -444,6 +498,8 @@ class Backend(QObject):
         return self._clips
 
     def _poll_rec(self):
+        if self._rec_busy:
+            return      # a start/stop is in flight on a worker; it reports the new state itself
         st = self._rec.status()
         if st != self._rec_state:
             if st.get("error") and self._rec_state.get("mode"):
@@ -585,14 +641,12 @@ class Backend(QObject):
 
     @Slot(str)
     def openPath(self, path):
-        subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     @Slot(str)
     def showInFolder(self, path):
         if shutil.which("dolphin"):
-            subprocess.Popen(["dolphin", "--select", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
+            QProcess.startDetached("dolphin", ["--select", path])    # detached: nothing left to reap
         else:
             self.openPath(os.path.dirname(path))
 
@@ -630,7 +684,7 @@ class Backend(QObject):
 
     @Slot()
     def refreshProcesses(self):
-        if not self._gpu:
+        if not self._gpu or not self._ui_visible:
             return
         slot = self._gpu.pci_slot
 
@@ -653,7 +707,7 @@ class Backend(QObject):
             out.sort(key=lambda x: (-(x["gpu_pct"] or 0), -x["vram_mb"]))
             self._procs = out[:12]
             self.procsChanged.emit()
-        self._run(lambda: G.gpu_processes(slot), ok, lambda e: None)
+        self._run(lambda: G.gpu_processes(slot), ok, lambda e: None, key="procs")
 
     # ---------------------------------------------------------------- metric logging (CSV)
     @Property(str, notify=loggingChanged)
@@ -665,16 +719,16 @@ class Backend(QObject):
         import csv
         import time as _t
         if self._log_fh:
-            self._log_fh.close()
-            self._log_fh = None
+            self._close_log()
             self.toast.emit(f"Saved {self._log_path}")
             self.loggingChanged.emit()
             return
         d = Path(os.environ.get("XDG_DOCUMENTS_DIR", Path.home() / "Documents")) / "Ember logs"
         d.mkdir(parents=True, exist_ok=True)
         self._log_path = str(d / _t.strftime("ember-%Y%m%d-%H%M%S.csv"))
-        self._log_fh = open(self._log_path, "w", newline="")
+        self._log_fh = open(self._log_path, "w", newline="", buffering=1)   # line-buffered: survives a crash
         self._log_csv = csv.writer(self._log_fh)
+        self._apply_pace()
         self._log_csv.writerow(["time", "gpu_mhz", "mem_mhz", "busy_pct", "power_w", "power_cap_w",
                                 "edge_c", "hotspot_c", "mem_c", "fan_rpm", "vram_used_mb", "vddgfx_mv", "throttle"])
         self.toast.emit("Recording metrics to CSV")
@@ -687,9 +741,20 @@ class Backend(QObject):
                                     s.get("power_w"), s.get("power_cap_w"), s.get("temp_edge"), s.get("temp_junction"),
                                     s.get("temp_mem"), s.get("fan_rpm"), round((s.get("vram_used") or 0) / 2**20),
                                     s.get("vddgfx_mv"), "|".join(s.get("throttle") or [])])
-        except (OSError, ValueError):
-            self._log_fh = None
+        except (OSError, ValueError) as e:
+            self._close_log()
+            self.toast.emit(f"Metric logging stopped: {e}")
             self.loggingChanged.emit()
+
+    def _close_log(self, repace=True):
+        fh, self._log_fh = self._log_fh, None
+        if fh:
+            try:
+                fh.close()
+            except OSError:
+                pass
+        if repace:
+            self._apply_pace()
 
     # ---------------------------------------------------------------- displays
     @Property("QVariant", notify=displaysChanged)
@@ -779,7 +844,7 @@ class Backend(QObject):
 
         def ok(resp):
             changed = (not self._daemon["connected"] or resp.get("authorized") != self._daemon["authorized"]
-                       or json.dumps(resp, sort_keys=True) != json.dumps(self._dstate, sort_keys=True))
+                       or resp != self._dstate)
             self._daemon = {"connected": True, "authorized": bool(resp.get("authorized")),
                             "boot_skipped": bool(resp.get("boot_skipped"))}
             self._dstate = resp
@@ -793,7 +858,7 @@ class Backend(QObject):
                 self._daemon = {"connected": False, "authorized": False}
                 self._dstate = {}
                 self.daemonChanged.emit()
-        self._run(fetch, ok, fail)
+        self._run(fetch, ok, fail, key="daemon")
 
     def _cmd(self, req: dict, msg: str | None = None):
         if not self._gpu:
@@ -870,7 +935,7 @@ class Backend(QObject):
             self.toast.emit(ok_msg)
             if then:
                 then()
-        self._run(job, ok, lambda e: self.toast.emit(f"Failed: {e}"), busy=True)
+        self._run(job, ok, lambda e: self.toast.emit(f"Failed: {e}"), busy=True, own_thread=True)
 
     @Slot()
     def installService(self):
@@ -1087,10 +1152,12 @@ class Backend(QObject):
 
     @Slot(str)
     def openUrl(self, url):
-        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if str(url).startswith(("https://", "http://")):     # release links come from the network: web only
+            QDesktopServices.openUrl(QUrl(url))
 
     def shutdown(self):
         self.stopRecorderOnQuit()
-        self._timer.stop()
-        self._dtimer.stop()
+        for t in (self._timer, self._dtimer, self._ptimer, self._gtimer, self._utimer, self._uctimer, self._rtimer):
+            t.stop()
+        self._close_log(repace=False)
         self._pool.shutdown(wait=False, cancel_futures=True)

@@ -44,7 +44,9 @@ Flickable {
                 anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                 height: 56; radius: 28
                 width: stRow.implicitWidth + 40
-                color: Theme.surfaceContainerHigh
+                color: page.applied ? Theme.secondaryContainer : Theme.surfaceContainerHigh
+                border.width: 1; border.color: Theme.alpha(Theme.outlineVariant, 0.6)
+                Behavior on color { ColorAnimation { duration: Theme.medium } }
                 Row {
                     id: stRow
                     anchors.centerIn: parent; spacing: 12
@@ -100,7 +102,7 @@ Flickable {
                 color: Theme.alpha(Theme.good, 0.10)
                 border.width: 1; border.color: Theme.alpha(Theme.good, 0.4)
                 RoundedImage { id: npi; x: 16; anchors.verticalCenter: parent.verticalCenter; width: 120; height: 80; radius: 16
-                               source: npc.modelData.header ? "file://" + npc.modelData.header : "" }
+                               source: F.fileUrl(npc.modelData.header) }
                 Column {
                     anchors.left: npi.right; anchors.leftMargin: 20; anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right; anchors.rightMargin: 24
@@ -108,7 +110,7 @@ Flickable {
                     Row {
                         spacing: 8
                         Rectangle { width: 10; height: 10; radius: 5; color: Theme.good; anchors.verticalCenter: parent.verticalCenter
-                                    SequentialAnimation on opacity { loops: Animation.Infinite
+                                    SequentialAnimation on opacity { loops: Animation.Infinite; running: ember.uiVisible
                                         NumberAnimation { to: 0.25; duration: 700 } NumberAnimation { to: 1; duration: 700 } } }
                         Label { text: "NOW PLAYING · EMBER ACTIVE"; role: "labelL"; emphasized: true; color: Theme.good }
                     }
@@ -127,6 +129,12 @@ Flickable {
         Card {
             width: parent.width; height: 300
             radius: 32
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: Theme.mix(Theme.surfaceContainer, Theme.primary, Theme.dark ? 0.10 : 0.08) }
+                GradientStop { position: 0.55; color: Theme.surfaceContainer }
+                GradientStop { position: 1.0; color: Theme.mix(Theme.surfaceContainer, Theme.tertiary, Theme.dark ? 0.06 : 0.06) }
+            }
             Row {
                 anchors.centerIn: parent
                 spacing: (parent.width - 4 * 220) / 5
@@ -134,20 +142,20 @@ Flickable {
                     width: 220; height: 220
                     value: page.s.gfx_mhz || 0; to: page.sclkMax
                     text: (page.s.gfx_mhz || 0) < 1 ? "Idle" : F.num(page.s.gfx_mhz)
-                    unit: (page.s.gfx_mhz || 0) < 1 ? "" : "MHz"; label: "GPU clock"
+                    unit: (page.s.gfx_mhz || 0) < 1 ? "" : "MHz"; label: "GPU clock"; icon: "speed"
                     sub: "Load " + F.num(page.s.busy) + "%"
                 }
                 Gauge {
                     width: 220; height: 220
                     value: page.s.temp_junction || 0; from: 20; to: 110
-                    unit: "°C"; label: "Hotspot"
+                    unit: "°C"; label: "Hotspot"; icon: "thermostat"
                     color: Theme.heat(page.s.temp_junction || 0)
                     sub: "Edge " + F.num(page.s.temp_edge) + "° · Mem " + F.num(page.s.temp_mem) + "°"
                 }
                 Gauge {
                     width: 220; height: 220
                     value: page.s.power_w || 0; to: page.s.power_cap_w || 200
-                    unit: "W"; label: "Board power"
+                    unit: "W"; label: "Board power"; icon: "bolt"
                     color: Theme.mix(Theme.primary, "#FF8A00", 0.5)
                     sub: "Limit " + F.num(page.s.power_cap_w) + " W"
                 }
@@ -157,7 +165,7 @@ Flickable {
                     value: hasFan ? (page.s.fan_rpm || 0) : (page.s.vram_pct || 0)
                     to: hasFan ? (page.s.fan_max_rpm || 3500) : 100
                     text: hasFan ? ((page.s.fan_rpm || 0) < 1 ? "0" : F.num(page.s.fan_rpm)) : F.num(page.s.vram_pct)
-                    unit: hasFan ? "RPM" : "%"; label: hasFan ? "Fan" : "Graphics memory"
+                    unit: hasFan ? "RPM" : "%"; label: hasFan ? "Fan" : "Graphics memory"; icon: hasFan ? "fan" : "memory"
                     color: Theme.mix(Theme.primary, "#00B8D4", 0.75)
                     sub: hasFan ? ((page.s.fan_rpm || 0) < 1 ? "Zero RPM" : (page.s.fan_mode === "manual" ? "Ember curve" : "Firmware"))
                                 : F.gib(page.s.vram_used) + " of " + F.gib(page.s.vram_total) + " GB"
@@ -176,15 +184,27 @@ Flickable {
                     id: tile
                     required property string modelData
                     readonly property bool sel: (modelData === "Stock" && !page.applied) || modelData === page.applied
-                    width: (col.width - 3 * 12) / 4; height: 104
+                    width: (col.width - 3 * 12) / 4; height: 116
                     radius: sel ? 28 : 20
                     Behavior on radius { NumberAnimation { duration: Theme.medium; easing.type: Easing.OutBack } }
                     color: sel ? Theme.primary : Theme.surfaceContainer
+                    border.width: sel ? 0 : 1
+                    border.color: Theme.alpha(Theme.outlineVariant, Theme.dark ? 0.55 : 0.9)
                     Behavior on color { ColorAnimation { duration: Theme.fast } }
                     opacity: ember.daemon.authorized ? 1 : 0.5
-                    Rectangle { anchors.fill: parent; radius: parent.radius; color: Theme.ink; opacity: ma.containsMouse && !tile.sel ? 0.05 : 0 }
-                    Icon { x: 20; y: 20; name: F.profileIcon(tile.modelData); size: 26
-                           color: tile.sel ? Theme.inkPrimary : Theme.primary }
+                    scale: ma.pressed ? 0.98 : 1
+                    Behavior on scale { NumberAnimation { duration: Theme.fast } }
+                    StateLayer { id: sl; radius: tile.radius; tint: tile.sel ? Theme.inkPrimary : Theme.ink
+                                 hovered: ma.containsMouse; pressed: ma.pressed }
+                    Rectangle { x: 16; y: 14; width: 40; height: 40; radius: tile.sel ? 20 : 12
+                                Behavior on radius { NumberAnimation { duration: Theme.medium; easing.type: Easing.OutBack } }
+                                color: tile.sel ? Theme.alpha(Theme.inkPrimary, 0.2) : Theme.alpha(Theme.primary, Theme.dark ? 0.18 : 0.14)
+                                Icon { anchors.centerIn: parent; name: F.profileIcon(tile.modelData); size: 22
+                                       color: tile.sel ? Theme.inkPrimary : Theme.primary } }
+                    Rectangle { visible: tile.sel; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 16
+                                height: 24; radius: 12; width: act.implicitWidth + 20; color: Theme.alpha(Theme.inkPrimary, 0.2)
+                                Label { id: act; anchors.centerIn: parent; text: "Active"; role: "labelS"; emphasized: true
+                                        color: Theme.inkPrimary } }
                     Column {
                         x: 20; anchors.bottom: parent.bottom; anchors.bottomMargin: 16
                         width: parent.width - 40
@@ -195,6 +215,7 @@ Flickable {
                     }
                     MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 enabled: ember.daemon.authorized
+                                onPressed: (m) => sl.ripple(m.x, m.y)
                                 onClicked: ember.activateProfile(tile.modelData === "Stock" ? "" : tile.modelData) }
                 }
             }

@@ -61,7 +61,7 @@ Item {
         }
         RotationAnimator on rotation {
             from: 0; to: 360; duration: root.spinDuration
-            loops: Animation.Infinite; running: root.spinning && root.visible
+            loops: Animation.Infinite; running: root.spinning && root.visible && ember.uiVisible
         }
     }
 }

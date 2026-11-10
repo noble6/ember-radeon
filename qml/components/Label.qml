@@ -16,8 +16,8 @@ Text {
     font.pixelSize: spec[role][0]
     lineHeight: spec[role][1]
     lineHeightMode: Text.FixedHeight
-    font.weight: emphasized ? (role.startsWith("display") || role.startsWith("headline") ? Font.Black : Font.Bold)
+    font.weight: emphasized ? (role.startsWith("display") || role.startsWith("headline") ? Font.ExtraBold : Font.Bold)
                             : (role.startsWith("title") || role.startsWith("label") ? Font.DemiBold : Font.Normal)
-    font.letterSpacing: role.startsWith("display") ? -1.2 : role.startsWith("headline") ? -0.4 : 0.1
+    font.letterSpacing: role.startsWith("display") ? -0.6 : role.startsWith("headline") ? -0.25 : role.startsWith("title") ? 0 : 0.1
     verticalAlignment: Text.AlignVCenter
 }
