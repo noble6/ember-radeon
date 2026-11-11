@@ -74,10 +74,7 @@ Item {
         onPressed: (m) => root.moved(root.valueAt(m.x))
         onPositionChanged: (m) => { if (pressed) root.moved(root.valueAt(m.x)) }
         onReleased: root.committed(root.value)
-        onWheel: (w) => {
-            var step = root.stepSize > 0 ? root.stepSize : root.span / 100
-            var v = Math.max(root.from, Math.min(root.to, root.value + (w.angleDelta.y > 0 ? step : -step)))
-            root.moved(v); root.committed(v)
-        }
+        // No wheel handling on purpose: a slider under the pointer must never change
+        // while the page is being scrolled. Wheel events fall through to the page.
     }
 }

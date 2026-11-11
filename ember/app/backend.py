@@ -17,6 +17,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, QProcess, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 
+from ember.app import autotune as AT
 from ember.app import caches
 from ember.app import hotkeys as HK
 from ember.app import recorder as REC
@@ -66,6 +67,8 @@ class Backend(QObject):
     updateChanged = Signal()
     restartRequested = Signal()
     uiVisibleChanged = Signal()
+    autotuneChanged = Signal()
+    _tuneProgress = Signal(int, int, str)
     toast = Signal(str)
     _done = Signal(object, object, object)   # (callback, result, error) marshalled to the GUI thread
 
@@ -86,6 +89,10 @@ class Backend(QObject):
         self._ui_visible = True
         self._pending: set = set()      # periodic jobs still queued or running (never stack them up)
         self._restart_needed = False
+        self._tune = {"running": False, "step": 0, "total": 0, "message": "", "result": None, "error": ""}
+        self._tune_cancel = threading.Event()
+        self._tune_restore = None
+        self._tuneProgress.connect(self._on_tune_progress)
         self._pool = ThreadPoolExecutor(max_workers=2)
         self._settings = self._load_settings()
         self._done.connect(self._on_done)
@@ -965,6 +972,103 @@ class Backend(QObject):
         self._cmd({"cmd": "save_profile", "name": name, "settings": settings, "activate": activate},
                   f"Saved “{name}”" + (" and applied" if activate else ""))
 
+    # ---------------------------------------------------------------- automatic undervolt
+    TUNE_TEMP = "Auto-tune (testing)"
+    TUNE_RESULT = "Auto undervolt"
+
+    @Property("QVariant", notify=autotuneChanged)
+    def autotune(self):
+        stock = self.gpuState.get("od_stock") if self._gpu else None
+        ctl = next((c for c in G.od_controls(self._tuning.get("od"), stock) if c["key"] == "vddgfx_offset"), None)
+        return {**self._tune, "available": AT.available(), "supported": ctl is not None,
+                "floor": max(int(ctl["from"]), AT.FLOOR_MV) if ctl else 0, "profile": self.TUNE_RESULT}
+
+    def _on_tune_progress(self, step, total, message):
+        self._tune.update(step=step, total=total, message=message)
+        self.autotuneChanged.emit()
+
+    @Slot()
+    def startAutoUndervolt(self):
+        info = self.autotune
+        if self._tune["running"] or not self._gpu:
+            return
+        problem = ("This card has no voltage offset control" if not info["supported"]
+                   else "Install vkmark first: it is the load Ember tests with" if not info["available"]
+                   else "The Ember service must be running and allow changes" if not self._daemon.get("authorized")
+                   else "Close your game first" if self._playing
+                   else "Stop recording or streaming first" if self._rec_state.get("mode") else "")
+        if problem:
+            self.toast.emit(problem)
+            return
+        gpu, slot = self._gpu, self._gpu.pci_slot
+        gs = self.gpuState
+        prev = gs.get("active")
+        base = copy.deepcopy((gs.get("profiles") or {}).get(prev) or T.DEFAULTS)
+        cancel = self._tune_cancel
+        cancel.clear()
+
+        def restore():
+            try:
+                dc.request({"cmd": "activate", "gpu": slot, "name": prev} if prev else {"cmd": "reset", "gpu": slot})
+            finally:
+                dc.request({"cmd": "delete_profile", "gpu": slot, "name": self.TUNE_TEMP})
+
+        def apply(mv):
+            if mv is None:
+                restore()
+                return
+            s = copy.deepcopy(base)
+            s["od"] = {**(base.get("od") or {}), "vddgfx_offset": int(mv)}
+            r = dc.request({"cmd": "save_profile", "gpu": slot, "name": self.TUNE_TEMP, "settings": s, "activate": True})
+            err = (r.get("runtime") or {}).get("error")
+            if err:
+                raise AT.TuneError(f"the driver refused {mv} mV: {err}")
+            time.sleep(1.5)     # let the new voltage settle before loading the card
+
+        def work():
+            return AT.find_undervolt(apply, lambda: AT.run_load(gpu, cancel.is_set), info["floor"],
+                                     self._tuneProgress.emit, cancel.is_set)
+
+        def done(res):
+            self._tune_restore = None
+            rec = res.get("recommended") or 0
+            summary = {"best": res.get("best"), "recommended": rec, "stopped": res.get("stopped"),
+                       "score": (res.get("baseline") or {}).get("score"),
+                       "power": (res.get("baseline") or {}).get("power_w"), "saved": False}
+            passed = [s for s in res.get("steps") or [] if s.get("mv") == res.get("best")]
+            if passed and summary["power"] and passed[0].get("power_w"):
+                summary["power_after"] = passed[0]["power_w"]
+            if rec:
+                s = copy.deepcopy(base)
+                s["od"] = {**(base.get("od") or {}), "vddgfx_offset": rec}
+                self._cmd({"cmd": "save_profile", "name": self.TUNE_RESULT, "settings": s, "activate": False})
+                summary["saved"] = True
+            self._tune.update(running=False, result=summary, error="", message="")
+            self.autotuneChanged.emit()
+            self.refreshDaemon()
+            self.recEvent.emit("Undervolt search finished",
+                               f"Recommended {rec} mV, saved as “{self.TUNE_RESULT}”" if rec
+                               else "No stable undervolt found; nothing was changed")
+
+        def fail(e):
+            self._tune_restore = None
+            self._tune.update(running=False, result=None, error=str(e), message="")
+            self.autotuneChanged.emit()
+            self.refreshDaemon()
+            self.toast.emit(f"Undervolt search stopped: {e}")
+
+        self._tune_restore = restore
+        self._tune.update(running=True, step=0, total=0, message="Starting", result=None, error="")
+        self.autotuneChanged.emit()
+        self._run(work, done, fail, own_thread=True)
+
+    @Slot()
+    def cancelAutoUndervolt(self):
+        if self._tune["running"]:
+            self._tune_cancel.set()
+            self._tune["message"] = "Stopping and restoring your settings"
+            self.autotuneChanged.emit()
+
     @Slot(str)
     def exportProfile(self, name):
         settings = (self.gpuState.get("profiles") or {}).get(name)
@@ -1292,6 +1396,12 @@ class Backend(QObject):
             QDesktopServices.openUrl(QUrl(url))
 
     def shutdown(self):
+        if self._tune_restore:           # quitting in the middle of a search: don't leave a test voltage on
+            self._tune_cancel.set()
+            try:
+                self._tune_restore()
+            except Exception:  # noqa: BLE001
+                pass
         self.stopRecorderOnQuit()
         for t in (self._timer, self._dtimer, self._ptimer, self._gtimer, self._utimer, self._uctimer, self._rtimer):
             t.stop()

@@ -15,7 +15,8 @@ What the Windows Radeon software does, and what Ember uses on Linux to do the sa
 | Fan tuning / custom curve | Drag-and-drop curve, fixed speed, hysteresis, emergency override | `pwm1` loop (RDNA 1/2, GCN), firmware `gpu_od/fan_ctrl/fan_curve` (RDNA 3+) | Yes |
 | Zero RPM, fan target temperature, acoustic limit | Fan firmware options | `fan_zero_rpm_enable`, `fan_target_temperature`, `acoustic_*_rpm_threshold`, `fan_minimum_pwm` | RDNA 3+ |
 | Memory timing ("Fast Timing") | - | not exposed by amdgpu | No |
-| Auto undervolt / auto overclock | - | needs a stress-test loop | Planned |
+| Auto undervolt | "Find my undervolt": steps the voltage down 25 mV at a time under load, stops at a crash, a kernel GPU error or a performance drop, goes no lower than -75 mV, saves two thirds of the deepest passing step as a profile | `vo` offset + vkmark as the load + kernel log | RDNA 2 and newer; needs vkmark |
+| Auto overclock | - | | No (manual sliders) |
 | Share tuning profiles (import / export) | Export to a file, import with every value re-checked against the importing card's limits | JSON profile files | Yes |
 | Apply tuning at startup | Apply at boot + 90 s boot crash guard | systemd service | Yes |
 

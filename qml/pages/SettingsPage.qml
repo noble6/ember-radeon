@@ -3,6 +3,7 @@ import "../components"
 
 Flickable {
     id: page
+    WheelScroll { view: page }
     contentHeight: col.height + 64
     clip: true
     boundsBehavior: Flickable.StopAtBounds

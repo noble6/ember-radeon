@@ -83,6 +83,10 @@ Installed from the AUR or another package? Then your package manager handles upd
 
 The kernel hides clock and voltage controls unless the overdrive bit is set in `amdgpu.ppfeaturemask`. **Tuning → Enable overdrive…** does it for you: it writes `/etc/modprobe.d/ember-overdrive.conf` and rebuilds your initramfs with mkinitcpio, dracut or update-initramfs. Then reboot. While overdrive is on, the kernel marks itself "tainted", which only matters if you file kernel bugs.
 
+### Automatic undervolt
+
+**Tuning > Find my undervolt** does the careful manual routine for you: it measures stock performance, lowers the voltage 25 mV at a time, loads the GPU after each step and stops at a crash, a GPU error in the kernel log or a drop in performance (a Radeon that is short on voltage often gets slower before it crashes). A step that only scores low is measured twice, so another program using the CPU does not end the search early. The search stops at -75 mV and the result, a third less than the deepest step that passed, is saved as a profile that is not activated until you choose it. It needs overdrive unlocked and the `vkmark` package, and works on RDNA 2 and newer. The test is short and light: it rules out settings that are clearly too low, it does not prove stability in every game. Treat the result as a starting point.
+
 ### Per-game graphics
 
 Launch a Steam game with `ember-run %command%`; Ember can write that into the game's launch options for you. Automatic tuning-profile switching works with no launch options at all.

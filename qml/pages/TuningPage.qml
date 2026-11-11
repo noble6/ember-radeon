@@ -45,6 +45,7 @@ Item {
 
     Flickable {
         id: fl
+        WheelScroll { view: fl }
         anchors.fill: parent
         contentHeight: col.height + 140
         clip: true
@@ -245,7 +246,7 @@ Item {
                     }
                     Label { visible: page.draft.fan.mode !== "auto"; width: parent.width; wrapMode: Text.WordWrap
                             role: "bodyS"; color: Theme.inkVariant
-                            text: "Safety: fans go to 100% within 5 °C of the hotspot limit whatever the curve says, and return to firmware control if the service stops." }
+                            text: "Safety: from 20 °C below any sensor’s limit the fans speed up whatever the curve says, reaching 100% at 5 °C below, and they return to firmware control if the service stops." }
                 }
             }
 
@@ -280,6 +281,66 @@ Item {
                             d.od = {}
                             for (var i = 0; i < page.odControls.length; i++) d.od[page.odControls[i].key] = page.odControls[i].stock
                         })
+                    }
+                    // automatic undervolt
+                    Rectangle {
+                        id: at
+                        readonly property var a: ember.autotune
+                        visible: !!a.supported
+                        width: parent.width; height: atc.height + 32; radius: 20
+                        color: a.running ? Theme.alpha(Theme.primary, 0.10) : Theme.surfaceContainerHigh
+                        border.width: 1; border.color: Theme.alpha(a.running ? Theme.primary : Theme.outlineVariant, 0.5)
+                        Column {
+                            id: atc
+                            x: 16; y: 16; width: parent.width - 32; spacing: 10
+                            Item {
+                                width: parent.width; height: Math.max(40, att.height)
+                                IconBadge { id: atb; icon: "sparkle"; anchors.verticalCenter: parent.verticalCenter; round: at.a.running }
+                                Column {
+                                    id: att
+                                    anchors.left: atb.right; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                                    anchors.right: atBtn.left; anchors.rightMargin: 16
+                                    Label { text: "Find my undervolt"; role: "titleM" }
+                                    Label { width: parent.width; wrapMode: Text.WordWrap; role: "bodyS"; color: Theme.inkVariant
+                                            lineHeightMode: Text.ProportionalHeight; lineHeight: 1.1
+                                            text: at.a.running ? (at.a.message + (at.a.total ? "  ·  step " + at.a.step + " of up to " + at.a.total : ""))
+                                                 : !at.a.available ? "Needs the vkmark benchmark as a load (install the vkmark package)."
+                                                 : "Lowers the voltage in 25 mV steps down to " + at.a.floor + " mV, loads the GPU after each one and stops when performance drops or an error appears. Takes a few minutes; a benchmark window opens, so leave the PC idle meanwhile. Your current settings are put back at the end." }
+                                }
+                                Btn { id: atBtn; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                                      text: at.a.running ? "Cancel" : "Start"; icon: at.a.running ? "close" : "play"
+                                      variant: at.a.running ? "outlined" : "tonal"
+                                      enabled: at.a.running || (!!at.a.available && page.can)
+                                      onClicked: at.a.running ? ember.cancelAutoUndervolt() : ember.startAutoUndervolt() }
+                            }
+                            Rectangle {   // progress
+                                visible: !!at.a.running && at.a.total > 0
+                                width: parent.width; height: 6; radius: 3; color: Theme.surfaceContainerHighest
+                                Rectangle { height: parent.height; radius: 3; color: Theme.primary
+                                            width: parent.width * Math.min(1, (at.a.step + 0.5) / Math.max(1, at.a.total))
+                                            Behavior on width { NumberAnimation { duration: Theme.slow; easing.type: Easing.OutCubic } } }
+                            }
+                            Item {
+                                visible: !at.a.running && (!!at.a.result || !!at.a.error)
+                                width: parent.width; height: Math.max(36, atr.implicitHeight)
+                                Label { id: atr; anchors.left: parent.left; anchors.right: atOpen.visible ? atOpen.left : parent.right
+                                        anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter
+                                        wrapMode: Text.WordWrap; role: "body"; lineHeightMode: Text.ProportionalHeight; lineHeight: 1.15
+                                        color: at.a.error ? Theme.hot : Theme.ink
+                                        text: {
+                                            if (at.a.error) return "Stopped: " + at.a.error + ". Your settings were restored."
+                                            var r = at.a.result
+                                            if (!r) return ""
+                                            if (!r.recommended) return "No undervolt passed the test (" + r.stopped + "). Nothing was changed."
+                                            var p = r.power && r.power_after ? "  Under load: " + Math.round(r.power) + " W at stock, about " + Math.round(r.power_after) + " W at " + r.best + " mV." : ""
+                                            return "Recommended: " + r.recommended + " mV. Passed down to " + r.best + " mV (" + r.stopped + "); the recommendation keeps a margin, because the test is short." + p
+                                                   + " Saved as “" + at.a.profile + "”, not activated."
+                                        } }
+                                Btn { id: atOpen; visible: !!(at.a.result && at.a.result.saved)
+                                      anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                                      text: "Open profile"; variant: "text"; icon: "tune"; onClicked: page.load(at.a.profile) }
+                            }
+                        }
                     }
                     Column {
                         visible: page.odControls.length > 0 && !!page.draft.od

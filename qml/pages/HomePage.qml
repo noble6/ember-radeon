@@ -4,6 +4,7 @@ import "Fmt.js" as F
 
 Flickable {
     id: page
+    WheelScroll { view: page }
     signal navigate(int page)
     contentHeight: col.height + 64
     clip: true
