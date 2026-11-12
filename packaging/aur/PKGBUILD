@@ -1,6 +1,6 @@
 # Maintainer: noble6
 pkgname=ember-radeon
-pkgver=1.7.1
+pkgver=1.7.2
 pkgrel=1
 pkgdesc="AMD Radeon GPU control center for Linux: tuning, fan curves, undervolting, FSR 4, Anti-Lag, FreeSync (Adrenalin-style)"
 arch=('any')

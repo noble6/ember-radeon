@@ -92,7 +92,9 @@ The kernel hides clock and voltage controls unless the overdrive bit is set in `
 
 Launch a Steam game with `ember-run %command%`; Ember can write that into the game's launch options for you. Automatic tuning-profile switching works with no launch options at all.
 
-Games outside Steam (Flatpaks like Sober, Lutris, Heroic, Bottles, native games) are added from **Gaming > Add game**, which lists your installed apps with their icons and works out the process to watch for. **Create launcher** then adds a "Game (Ember)" entry to your app menu that starts the game with its Ember graphics settings. By hand, it is `ember-run --id exe:NAME -- command`. Graphics features inside a Flatpak need the Flatpak builds of MangoHud and vkBasalt.
+Games outside Steam (Flatpaks like Sober, Lutris, Heroic, Bottles, native games) are added from **Gaming > Add game**, which lists your installed apps with their icons and works out the process to watch for. **Create launcher** then adds a "Game (Ember)" entry to your app menu that starts the game with its Ember graphics settings. By hand, it is `ember-run --id exe:NAME -- command`. Flatpak games are handled: Ember passes its settings into the sandbox when it launches one. The effects themselves must exist there too, so sharpening and anti-aliasing need the Flatpak build of vkBasalt and the overlay needs the Flatpak build of MangoHud.
+
+**Online-safe mode** (a switch on each game's page) is for online games with anti-cheat. Sharpening, anti-aliasing, the overlay, the banner, the FPS cap and Anti-Lag work by loading extra code into the game, and nobody outside the publisher can promise an anti-cheat will tolerate that. With the switch on, Ember applies only what loads nothing into the game: texture filtering, VSync mode and Super Resolution. Tuning profiles are unaffected either way. It is on by default for Sober (Roblox).
 
 ## Safety
 

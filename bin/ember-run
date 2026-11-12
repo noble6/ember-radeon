@@ -66,17 +66,23 @@ try:
             name = next((g["name"] for g in games.scan_steam() if g["id"] == game_id), None)
         except Exception:
             name = None
-    banner = games.banner_lines(name, gfx, profile)
-    env, argv = games.build_launch(gfx, argv, tag=game_id or "default", arch=arch, banner=banner)
+    safe = games.safe_mode_for(cfg, game_id)     # online game: nothing that injects code into it
+    banner = None if safe else games.banner_lines(name, gfx, profile)
+    env, argv = games.build_launch(gfx, argv, tag=game_id or "default", arch=arch, banner=banner, safe=safe)
     os.environ.pop("MANGOHUD_CONFIG", None)   # would override our config file
     os.environ.update(env)
     hud = env.get("MANGOHUD_CONFIGFILE")
     game_pid = os.getpid()      # exec keeps this pid: it becomes the game (or its launcher)
-    if hud and gfx.get("banner", True) and os.fork() == 0:
+    if hud and not safe and gfx.get("banner", True) and os.fork() == 0:
         # Detached helper: keep the banner up until the game is really drawing (launchers
         # and Proton can take a minute), leave it for a few seconds, then hide it and exit.
         try:
             os.setsid()
+            # Let go of the launcher's terminal and pipes: whoever started the game must
+            # not be kept waiting on this helper.
+            null = os.open(os.devnull, os.O_RDWR)
+            for fd in (0, 1, 2):
+                os.dup2(null, fd)
             import time
             exe = game_id[4:] if game_id and game_id.startswith("exe:") else None
             games.wait_until_rendering(game_pid, exe)

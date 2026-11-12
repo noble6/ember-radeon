@@ -1187,6 +1187,7 @@ class Backend(QObject):
             cfg = (self._gcfg.get("games") or {}).get(g["id"]) or {}
             out.append({**g, "profile": (rules.get(g["id"]) or {}).get("profile", ""),
                         "use_defaults": cfg.get("use_defaults", True),
+                        "safe_mode": GM.safe_mode_for(self._gcfg, g["id"]),
                         "graphics": GM.graphics_for(self._gcfg, g["id"])})
         return out
 
@@ -1247,6 +1248,17 @@ class Backend(QObject):
             self._gcfg["defaults"].update(clean)
         GM.save_games_config(self._gcfg)
         self.gamesChanged.emit()
+
+    @Slot(str, bool)
+    def setGameSafeMode(self, game_id, on):
+        """Online-safe mode: apply only the settings that load no code into the game."""
+        if not game_id:
+            return
+        self._gcfg["games"].setdefault(game_id, {})["safe_mode"] = bool(on)
+        GM.save_games_config(self._gcfg)
+        self.gamesChanged.emit()
+        self.toast.emit("Online-safe mode on: only driver settings apply to this game" if on
+                        else "Online-safe mode off: all graphics features apply to this game")
 
     @Slot(str, str, str)
     def setGameProfile(self, game_id, label, profile):
@@ -1355,11 +1367,11 @@ class Backend(QObject):
         self.appsChanged.emit()
         self.setGameProfile(f"exe:{exe}", exe, "")
 
-    @Slot("QVariant", result=str)
-    def launchPreview(self, gfx):
+    @Slot("QVariant", bool, result=str)
+    def launchPreview(self, gfx, safe=False):
         if hasattr(gfx, "toVariant"):
             gfx = gfx.toVariant()
-        return GM.env_preview(gfx, self.gpu.get("arch_key"))
+        return GM.env_preview(gfx, self.gpu.get("arch_key"), bool(safe)) or "(nothing is changed for this game)"
 
     # ---------------------------------------------------------------- system
     def _set_sys(self, info):

@@ -326,6 +326,13 @@ Flickable {
                             Btn { visible: !!(page.sel && page.sel.source === "Other"); text: "Remove game"; icon: "delete"; variant: "text"
                                   onClicked: { ember.removeCustomGame(page.sel.exe); page.selId = "" } }
                         }
+                        SwitchRow {
+                            width: parent.width; icon: "shield"
+                            title: "Online-safe mode"
+                            subtitle: "For online games with anti-cheat. Only settings that load nothing into the game apply: texture filtering, VSync mode and Super Resolution. Sharpening, anti-aliasing, the overlay, the banner, the FPS cap and Anti-Lag stay off for this game. Tuning profiles are never affected."
+                            checked: !!(page.sel && page.sel.safe_mode)
+                            onToggled: (on) => ember.setGameSafeMode(page.sel.id, on)
+                        }
                     }
                 }
             }
@@ -362,7 +369,8 @@ Flickable {
                         width: parent.width; height: pv.implicitHeight + 20; radius: 12; color: Theme.surfaceContainerHighest
                         Label { id: pv; x: 14; y: 10; width: parent.width - 28; wrapMode: Text.WrapAnywhere
                                 font.family: Theme.mono; role: "bodyS"; color: Theme.inkVariant
-                                text: ember.launchPreview(page.sel && page.sel.use_defaults ? ember.globalGraphics : (page.sel ? page.sel.graphics : {})) }
+                                text: ember.launchPreview(page.sel && page.sel.use_defaults ? ember.globalGraphics : (page.sel ? page.sel.graphics : {}),
+                                                          !!(page.sel && page.sel.safe_mode)) }
                     }
                 }
             }

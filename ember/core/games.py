@@ -474,6 +474,49 @@ def save_games_config(cfg: dict) -> None:
     os.replace(tmp, GAMES_FILE)
 
 
+# ---------------------------------------------------------------- online-safe mode
+#
+# Some graphics features work by loading extra code into the game's process (Vulkan layers
+# such as vkBasalt and MangoHud, the Mesa Anti-Lag layer, OptiScaler). Online games with
+# anti-cheat may object to that, and nobody outside the publisher can promise they won't.
+# Others only tell the graphics driver or the compositor what to do and load nothing.
+# In online-safe mode only the second kind is applied.
+INJECTED_OFF = {"antilag": False, "sharpen": 0, "aa": "off", "fps_cap": 0, "overlay": "off", "banner": False,
+                "fsr4": False, "fsr4_indicator": False, "mlfg": False, "optiscaler": False, "opti_fg": False}
+SAFE_BY_DEFAULT = {"exe:sober"}          # Roblox: has anti-cheat and no stated policy on layers
+
+
+def safe_graphics(gfx: dict) -> dict:
+    """The same settings with everything that injects code into the game switched off.
+    What remains: texture filtering, VSync mode, HDR, and gamescope (which runs outside the game)."""
+    return {**gfx, **INJECTED_OFF}
+
+
+def safe_mode_for(cfg: dict, game_id: str | None) -> bool:
+    v = ((cfg.get("games") or {}).get(game_id or "") or {}).get("safe_mode")
+    return bool(v) if isinstance(v, bool) else (game_id in SAFE_BY_DEFAULT)
+
+
+def flatpak_run_index(cmd: list[str]) -> int:
+    """Index of `run` in a `flatpak run ...` command, or -1."""
+    for i in range(len(cmd) - 1):
+        if os.path.basename(cmd[i]) == "flatpak" and cmd[i + 1] == "run":
+            return i + 1
+    return -1
+
+
+def into_flatpak(cmd: list[str], env: dict) -> list[str]:
+    """A Flatpak game runs in a sandbox: it does not see Ember's settings files and need
+    not inherit our environment. Hand both in explicitly through `flatpak run` options."""
+    i = flatpak_run_index(cmd)
+    if i < 0 or not env:
+        return cmd
+    opts = [f"--env={k}={v}" for k, v in env.items()]
+    if any(str(v).startswith(str(CACHE_DIR)) for v in env.values()):
+        opts.append(f"--filesystem={CACHE_DIR}:ro")     # the config files, read-only
+    return cmd[:i + 1] + opts + cmd[i + 1:]
+
+
 def graphics_for(cfg: dict, game_id: str | None) -> dict:
     out = dict(GRAPHICS_DEFAULTS)
     out.update({k: v for k, v in (cfg.get("defaults") or {}).items() if k in GRAPHICS_DEFAULTS})
@@ -589,7 +632,7 @@ def _launch_procs() -> dict:
 
 
 def wait_until_rendering(root_pid: int, exe: str | None = None, timeout: float = 300.0, steady: int = 2,
-                         poll: float = 1.0, procs=_launch_procs, sleep=time.sleep, clock=time.monotonic) -> bool:
+                         poll: float = 1.0, grace: float = 30.0, procs=_launch_procs, sleep=time.sleep, clock=time.monotonic) -> bool:
     """Block until the launched game is really drawing frames.
 
     Launchers, Proton and shader compilation can take a minute before the first frame, so
@@ -599,12 +642,14 @@ def wait_until_rendering(root_pid: int, exe: str | None = None, timeout: float =
 
     exe       process name to wait for (games started through a launcher: `exe:aces`)
     root_pid  otherwise any process descending from the launched command counts
-    Returns False if nothing rendered within `timeout`.
+    Returns False if nothing rendered within `timeout`, or if the launched command has
+    exited and no game appeared within `grace` seconds (it was closed, or failed to start).
     """
     want = exe.lower() if exe else None
     last: dict[int, int] = {}
     streak: dict[int, int] = {}
     end = clock() + timeout
+    gone_at = None
     while clock() < end:
         table = procs()
         if want:
@@ -626,6 +671,12 @@ def wait_until_rendering(root_pid: int, exe: str | None = None, timeout: float =
             streak[p] = streak.get(p, 0) + 1 if grew else 0
             if streak[p] >= steady:
                 return True
+        if cand or root_pid in table:
+            gone_at = None
+        else:
+            gone_at = clock() if gone_at is None else gone_at
+            if clock() - gone_at >= grace:
+                return False        # nothing left to wait for
         sleep(poll)
     return False
 
@@ -668,10 +719,14 @@ def banner_lines(game: str | None, gfx: dict, profile: str | None) -> list[str]:
 
 def build_launch(gfx: dict, argv: list[str], tag: str = "default", have=shutil.which,
                  arch: str | None = None, banner: list[str] | None = None,
-                 write_files: bool = True) -> tuple[dict, list[str]]:
-    """Return (env additions, argv) implementing the graphics options."""
+                 write_files: bool = True, safe: bool = False) -> tuple[dict, list[str]]:
+    """Return (env additions, argv) implementing the graphics options.
+    safe=True applies only what loads no code into the game (see safe_graphics)."""
+    if safe:
+        gfx, banner = safe_graphics(gfx), None
     env: dict[str, str] = {}
     cmd = list(argv)
+    in_flatpak = flatpak_run_index(cmd) >= 0
     if gfx.get("antilag"):
         env["ENABLE_LAYER_MESA_ANTI_LAG"] = "1"
     sharpen = int(gfx.get("sharpen") or 0)
@@ -717,7 +772,8 @@ def build_launch(gfx: dict, argv: list[str], tag: str = "default", have=shutil.w
             hud.with_suffix(".final").write_text("\n".join(final) + "\n")
             env["MANGOHUD_CONFIGFILE"] = str(hud)
         env["MANGOHUD"] = "1"
-        if have("mangohud") and cmd and os.path.basename(cmd[0]) != "mangohud":
+        # (inside a Flatpak the host's wrapper does nothing: the sandbox has its own MangoHud layer)
+        if not in_flatpak and have("mangohud") and cmd and os.path.basename(cmd[0]) != "mangohud":
             cmd = ["mangohud"] + cmd   # also covers OpenGL titles via LD_PRELOAD
     pm = gfx.get("present_mode", "default")
     if pm in PRESENT_MODES and pm != "default":
@@ -732,12 +788,14 @@ def build_launch(gfx: dict, argv: list[str], tag: str = "default", have=shutil.w
         env["PROTON_ENABLE_HDR"] = "1"
         env["DXVK_HDR"] = "1"
         env["ENABLE_HDR_WSI"] = "1"
+    if in_flatpak:
+        cmd = into_flatpak(cmd, env)
     return env, cmd
 
 
-def env_preview(gfx: dict, arch: str | None = None) -> str:
+def env_preview(gfx: dict, arch: str | None = None, safe: bool = False) -> str:
     env, cmd = build_launch(gfx, ["%command%"], tag="preview", have=lambda n: n in ("gamescope", "mangohud"),
-                            arch=arch, write_files=False)
+                            arch=arch, write_files=False, safe=safe)
     if "VKBASALT_CONFIG_FILE" in env:
         env["VKBASALT_CONFIG_FILE"] = "…"
     return " ".join([f"{k}={v}" for k, v in env.items()] + cmd)

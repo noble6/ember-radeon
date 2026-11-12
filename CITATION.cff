@@ -6,6 +6,6 @@ authors:
   - alias: noble6
 repository-code: "https://github.com/noble6/ember-radeon"
 license: GPL-3.0-or-later
-version: 1.7.1
+version: 1.7.2
 date-released: 2026-11-12
 keywords: [amd, radeon, amdgpu, linux, wayland, overclocking, undervolting, fan-curve, fsr4, anti-lag, freesync, adrenalin-alternative]

@@ -178,12 +178,66 @@ class GamesTests(unittest.TestCase):
         procs, sleep, clock = self._timeline([{50: ("proton", 1, 0)}])
         self.assertFalse(GM.wait_until_rendering(50, None, timeout=5, procs=procs, sleep=sleep, clock=clock))   # gives up
 
+    def test_banner_helper_gives_up_when_the_game_is_gone(self):
+        # the command exited and no game ever appeared: stop after the grace period, not after minutes
+        procs, sleep, clock = self._timeline([{1: ("systemd", 0, 0)}])
+        self.assertFalse(GM.wait_until_rendering(100, "aces", timeout=300, grace=5, procs=procs, sleep=sleep, clock=clock))
+        self.assertLessEqual(clock(), 6.0)
+        # a launcher that exits while the game is still loading does not end the wait
+        frames = [{100: ("launcher", 1, 0)}, {1: ("systemd", 0, 0)}, {300: ("aces", 1, 0)},
+                  {300: ("aces", 1, 20_000_000)}, {300: ("aces", 1, 40_000_000)}]
+        procs, sleep, clock = self._timeline(frames)
+        self.assertTrue(GM.wait_until_rendering(100, "aces", timeout=300, grace=5, procs=procs, sleep=sleep, clock=clock))
+
     def test_launch_process_table_reads_this_process(self):
         table = GM._launch_procs()
         self.assertIn(os.getpid(), table)
         name, ppid, ns = table[os.getpid()]
         self.assertEqual(ppid, os.getppid())
         self.assertIn("python", name)
+
+    def test_online_safe_mode_loads_nothing_into_the_game(self):
+        gfx = {**GM.GRAPHICS_DEFAULTS, "sharpen": 23, "aa": "fxaa", "aniso": 8, "antilag": True, "fps_cap": 60,
+               "overlay": "standard", "present_mode": "mailbox", "optiscaler": True, "fsr4": True}
+        env, cmd = GM.build_launch(gfx, ["game"], tag="t", have=lambda n: True, banner=["EMBER RADEON", "x"],
+                                   write_files=False, safe=True)
+        self.assertEqual(env, {"RADV_TEX_ANISO": "8", "MESA_VK_WSI_PRESENT_MODE": "mailbox"})   # driver options only
+        self.assertEqual(cmd, ["game"])                                 # no mangohud wrapper either
+        for k in env:
+            self.assertFalse(k.startswith(("ENABLE_", "MANGOHUD", "VKBASALT", "PROTON_")), k)
+        # the same settings without safe mode do inject
+        env2, cmd2 = GM.build_launch(gfx, ["game"], tag="t", have=lambda n: True, write_files=False)
+        self.assertIn("ENABLE_VKBASALT", env2)
+        self.assertEqual(cmd2[0], "mangohud")
+        # Roblox (Sober) is safe by default; a choice made by the user always wins
+        self.assertTrue(GM.safe_mode_for({"games": {}}, "exe:sober"))
+        self.assertFalse(GM.safe_mode_for({"games": {}}, "exe:aces"))
+        self.assertFalse(GM.safe_mode_for({"games": {"exe:sober": {"safe_mode": False}}}, "exe:sober"))
+        self.assertTrue(GM.safe_mode_for({"games": {"steam:1": {"safe_mode": True}}}, "steam:1"))
+
+    def test_flatpak_games_get_settings_handed_into_the_sandbox(self):
+        sober = ["/usr/bin/flatpak", "run", "--branch=stable", "--command=sober", "org.vinegarhq.Sober", "--"]
+        gfx = {**GM.GRAPHICS_DEFAULTS, "sharpen": 23, "aniso": 8, "banner": False}
+        with tempfile.TemporaryDirectory() as d:
+            old = GM.CACHE_DIR
+            GM.CACHE_DIR = Path(d)
+            try:
+                env, cmd = GM.build_launch(gfx, sober, tag="exe:sober", have=lambda n: True)
+            finally:
+                GM.CACHE_DIR = old
+        i = cmd.index("run")
+        opts = cmd[i + 1:cmd.index("--branch=stable")]
+        self.assertIn("--env=RADV_TEX_ANISO=8", opts)
+        self.assertIn("--env=ENABLE_VKBASALT=1", opts)
+        self.assertIn(f"--filesystem={d}:ro", opts)                     # so the sandbox can read the vkBasalt config
+        self.assertEqual(cmd[0], "/usr/bin/flatpak")                    # the host mangohud wrapper is not used
+        self.assertEqual(cmd[cmd.index("--branch=stable"):], sober[2:]) # the rest of the command is untouched
+        # safe mode: only the driver option goes in, and no folder is shared
+        env, cmd = GM.build_launch(gfx, sober, tag="exe:sober", have=lambda n: True, write_files=False, safe=True)
+        self.assertEqual([c for c in cmd if c.startswith("--env=") or c.startswith("--filesystem=")],
+                         ["--env=RADV_TEX_ANISO=8"])
+        # a non-Flatpak command is never rewritten
+        self.assertEqual(GM.into_flatpak(["game", "run"], {"A": "1"}), ["game", "run"])
 
     def test_optiscaler_fsr3(self):
         env, _ = GM.build_launch(dict(GM.GRAPHICS_DEFAULTS, optiscaler=True, opti_fg=True, banner=False), ["g"],
