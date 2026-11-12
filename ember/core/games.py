@@ -11,7 +11,7 @@ actually provides:
     Morphological AA    -> vkBasalt SMAA / FXAA
     Anisotropic filter  -> RADV_TEX_ANISO
     FSR 3 anywhere      -> OptiScaler (PROTON_USE_OPTISCALER) swaps DLSS/XeSS for FSR 3.1/4 + FSR 3 FG
-    "Ember active" bar  -> MangoHud custom_text banner, swapped out after a few seconds (inotify reload)
+    "Ember Radeon" bar  -> MangoHud custom_text banner, shown once the game draws, then swapped out (inotify reload)
     Frame rate target   -> MangoHud fps_limit
     Performance overlay -> MangoHud
     VSync / present     -> MESA_VK_WSI_PRESENT_MODE
@@ -46,7 +46,7 @@ GRAPHICS_DEFAULTS = {
     "mlfg": False,          # FSR "Redstone" ML frame generation
     "optiscaler": False,    # FSR 3.1/4 in games that only ship DLSS or XeSS (OptiScaler via Proton)
     "opti_fg": False,       # FSR 3 frame generation through OptiScaler
-    "banner": True,         # in-game "Ember active" banner for the first seconds
+    "banner": True,         # in-game "Ember Radeon" banner for the game's first seconds
     "aa": "off",            # off | fxaa | smaa  (vkBasalt)
     "aniso": 0,             # 0 = app, else 2/4/8/16 (RADV)
     "gamescope": False,     # driver-level upscaling ("RSR") via gamescope
@@ -552,6 +552,84 @@ def finalize_hud(path: str) -> None:
         pass
 
 
+def _launch_procs() -> dict:
+    """{pid: (name, parent pid, GPU render time in ns)} for every process we can see."""
+    out = {}
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return out
+    for pid in pids:
+        base = f"/proc/{pid}"
+        try:
+            with open(f"{base}/stat") as fh:
+                stat = fh.read()
+            ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+            with open(f"{base}/cmdline", "rb") as fh:
+                first = fh.read(4096).split(b"\0", 1)[0]
+        except (OSError, ValueError, IndexError):
+            continue
+        name = first.replace(b"\\", b"/").rsplit(b"/", 1)[-1].decode(errors="replace").lower()
+        ns = 0
+        try:
+            for fd in os.listdir(f"{base}/fdinfo"):
+                try:
+                    if not os.readlink(f"{base}/fd/{fd}").startswith("/dev/dri/"):
+                        continue
+                    with open(f"{base}/fdinfo/{fd}") as fh:
+                        for line in fh:
+                            if line.startswith("drm-engine-gfx:"):
+                                ns += int(line.split()[1])
+                except (OSError, ValueError, IndexError):
+                    continue
+        except OSError:
+            pass
+        out[int(pid)] = (name, ppid, ns)
+    return out
+
+
+def wait_until_rendering(root_pid: int, exe: str | None = None, timeout: float = 300.0, steady: int = 2,
+                         poll: float = 1.0, procs=_launch_procs, sleep=time.sleep, clock=time.monotonic) -> bool:
+    """Block until the launched game is really drawing frames.
+
+    Launchers, Proton and shader compilation can take a minute before the first frame, so
+    the banner countdown must not start when the command is run. A game counts as drawing
+    once its GPU render time has grown in `steady` checks in a row: about two seconds of
+    continuous frames, whether it is a heavy game or a light one.
+
+    exe       process name to wait for (games started through a launcher: `exe:aces`)
+    root_pid  otherwise any process descending from the launched command counts
+    Returns False if nothing rendered within `timeout`.
+    """
+    want = exe.lower() if exe else None
+    last: dict[int, int] = {}
+    streak: dict[int, int] = {}
+    end = clock() + timeout
+    while clock() < end:
+        table = procs()
+        if want:
+            cand = [p for p, (name, _pp, _ns) in table.items() if name == want]
+        else:
+            kids: dict[int, list] = {}
+            for p, (_n, pp, _ns) in table.items():
+                kids.setdefault(pp, []).append(p)
+            cand, todo = [], [root_pid]
+            while todo:
+                p = todo.pop()
+                if p in table:
+                    cand.append(p)
+                todo += kids.get(p, [])
+        for p in cand:
+            ns = table[p][2]
+            grew = p in last and ns - last[p] >= 1_000_000        # at least 1 ms of rendering since the last look
+            last[p] = ns
+            streak[p] = streak.get(p, 0) + 1 if grew else 0
+            if streak[p] >= steady:
+                return True
+        sleep(poll)
+    return False
+
+
 def hud_path(tag: str) -> Path:
     return CACHE_DIR / f"hud-{re.sub(r'[^A-Za-z0-9_.-]', '_', tag)}.conf"
 
@@ -584,7 +662,7 @@ def banner_lines(game: str | None, gfx: dict, profile: str | None) -> list[str]:
         feats.append("Sharpening")
     if int(gfx.get("fps_cap") or 0):
         feats.append(f"{int(gfx['fps_cap'])} FPS target")
-    title = "EMBER ACTIVE" + (f"  ·  {game}" if game else "")
+    title = "EMBER RADEON" + (f"  ·  {game}" if game else "")
     return [title[:60], ("  ·  ".join(feats) or "Radeon tuning ready")[:90]]
 
 

@@ -66,8 +66,8 @@ Flickable {
                 SwitchRow { width: parent.width; icon: "game"; title: "Notify when a game starts"
                             subtitle: "A desktop notification with the profile Ember is using for that game."
                             checked: page.cfg.notify_games !== false; onToggled: (on) => ember.setSetting("notify_games", on) }
-                SwitchRow { width: parent.width; icon: "sparkle"; title: "In-game “Ember active” banner"
-                            subtitle: "A small bar at the top of the game for its first seconds, listing your profile and features (games launched with ember-run)."
+                SwitchRow { width: parent.width; icon: "sparkle"; title: "In-game “Ember Radeon” banner"
+                            subtitle: "A small bar at the top of the game, shown for a few seconds once the game starts drawing, listing your profile and features (games launched with ember-run)."
                             checked: ember.globalGraphics.banner !== false
                             onToggled: (on) => { var g = JSON.parse(JSON.stringify(ember.globalGraphics)); g.banner = on; ember.setGraphics("", g) } }
                 SwitchRow { width: parent.width; icon: "close"; title: "Close to tray"

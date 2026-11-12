@@ -106,7 +106,7 @@ class GamesTests(unittest.TestCase):
         env, cmd = GM.build_launch(g, ["game"], tag="steam:1", have=lambda n: n == "mangohud", banner=banner)
         hud = env["MANGOHUD_CONFIGFILE"]
         text = Path(hud).read_text()
-        self.assertIn("custom_text_center=EMBER ACTIVE  ·  Death Stranding", text)
+        self.assertIn("custom_text_center=EMBER RADEON  ·  Death Stranding", text)
         self.assertIn("legacy_layout=0", text)
         self.assertEqual(cmd, ["mangohud", "game"])
         ino = os.stat(hud).st_ino
@@ -118,10 +118,10 @@ class GamesTests(unittest.TestCase):
         self.assertNotIn("MANGOHUD", env)
 
     def test_hud_text_cannot_inject_config(self):
-        lines = GM.mangohud_lines(dict(GM.GRAPHICS_DEFAULTS), ["EMBER ACTIVE  ·  Evil\nexec=rm -rf ~", "ok\x00\x07"])
+        lines = GM.mangohud_lines(dict(GM.GRAPHICS_DEFAULTS), ["EMBER RADEON  ·  Evil\nexec=rm -rf ~", "ok\x00\x07"])
         self.assertFalse(any(l.startswith("exec") for l in lines))
         self.assertTrue(all("\n" not in l and "\x00" not in l for l in lines))
-        self.assertIn("custom_text_center=EMBER ACTIVE  ·  Evil exec=rm -rf ~", lines)
+        self.assertIn("custom_text_center=EMBER RADEON  ·  Evil exec=rm -rf ~", lines)
 
     def test_one_click_presets(self):
         base = dict(GM.GRAPHICS_DEFAULTS)
@@ -134,6 +134,56 @@ class GamesTests(unittest.TestCase):
         after = {**mine, **perf["set"]}
         self.assertTrue(after["hdr"] and after["fsr4"] and after["overlay"] == "standard" and after["antilag"])
         self.assertEqual(GM.preset_of({**base, "sharpen": 55}), "")                 # a custom mix matches none
+
+    def _timeline(self, frames):
+        """Fake process tables, one per poll; returns (procs, sleep, clock)."""
+        state = {"i": 0}
+
+        def procs():
+            return frames[min(state["i"], len(frames) - 1)]
+
+        def sleep(_s):
+            state["i"] += 1
+        return procs, sleep, lambda: float(state["i"])
+
+    def test_banner_waits_for_the_game_not_the_launcher(self):
+        S = int(1e9)
+        # War Thunder: ember-run becomes the launcher (pid 100), which draws its own window
+        # for a while; the game (aces, pid 300) appears later, detached from the launcher.
+        frames = [
+            {1: ("systemd", 0, 0), 100: ("launcher", 1, 0)},
+            {1: ("systemd", 0, 0), 100: ("launcher", 1, 2 * S)},
+            {1: ("systemd", 0, 0), 100: ("launcher", 1, 4 * S)},
+            {1: ("systemd", 0, 0), 100: ("launcher", 1, 6 * S), 300: ("aces", 1, 0)},
+            {1: ("systemd", 0, 0), 300: ("aces", 1, 0)},                      # still loading: nothing drawn
+            {1: ("systemd", 0, 0), 300: ("aces", 1, int(0.016 * S))},         # first frames (a light scene)
+            {1: ("systemd", 0, 0), 300: ("aces", 1, int(0.032 * S))},
+        ]
+        procs, sleep, clock = self._timeline(frames)
+        self.assertTrue(GM.wait_until_rendering(100, "aces", timeout=60, procs=procs, sleep=sleep, clock=clock))
+        self.assertEqual(clock(), 6.0)             # not at launch, not at the launcher: two seconds into the game drawing
+
+    def test_banner_follows_the_process_tree_for_steam_games(self):
+        S = int(1e9)
+        frames = [
+            {50: ("proton", 1, 0), 60: ("firefox", 1, 9 * S)},
+            {50: ("proton", 1, 0), 51: ("wine-preloader", 50, 0), 60: ("firefox", 1, 12 * S)},   # unrelated app drawing
+            {50: ("proton", 1, 0), 51: ("wine-preloader", 50, 0), 52: ("ds.exe", 51, 0), 60: ("firefox", 1, 15 * S)},
+            {50: ("proton", 1, 0), 51: ("wine-preloader", 50, 0), 52: ("ds.exe", 51, S), 60: ("firefox", 1, 18 * S)},
+            {50: ("proton", 1, 0), 51: ("wine-preloader", 50, 0), 52: ("ds.exe", 51, 2 * S), 60: ("firefox", 1, 21 * S)},
+        ]
+        procs, sleep, clock = self._timeline(frames)
+        self.assertTrue(GM.wait_until_rendering(50, None, timeout=60, procs=procs, sleep=sleep, clock=clock))
+        self.assertEqual(clock(), 4.0)             # the grandchild drew; the browser never counted
+        procs, sleep, clock = self._timeline([{50: ("proton", 1, 0)}])
+        self.assertFalse(GM.wait_until_rendering(50, None, timeout=5, procs=procs, sleep=sleep, clock=clock))   # gives up
+
+    def test_launch_process_table_reads_this_process(self):
+        table = GM._launch_procs()
+        self.assertIn(os.getpid(), table)
+        name, ppid, ns = table[os.getpid()]
+        self.assertEqual(ppid, os.getppid())
+        self.assertIn("python", name)
 
     def test_optiscaler_fsr3(self):
         env, _ = GM.build_launch(dict(GM.GRAPHICS_DEFAULTS, optiscaler=True, opti_fg=True, banner=False), ["g"],

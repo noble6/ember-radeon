@@ -390,7 +390,7 @@ class Backend(QObject):
         body = f"{prof} profile" + (f" · {feats}" if feats and feats != "Radeon tuning ready" else "")
         if not g.get("wired") and g.get("source") == "Steam":
             body += " · add ember-run to unlock graphics features"
-        self.gameStarted.emit(f"Ember active · {g['name']}", body)
+        self.gameStarted.emit(f"Ember Radeon · {g['name']}", body)
 
     # ---------------------------------------------------------------- updates
     @Property("QVariant", notify=updateChanged)

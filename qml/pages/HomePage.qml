@@ -113,7 +113,7 @@ Flickable {
                         Rectangle { width: 10; height: 10; radius: 5; color: Theme.good; anchors.verticalCenter: parent.verticalCenter
                                     SequentialAnimation on opacity { loops: Animation.Infinite; running: ember.uiVisible
                                         NumberAnimation { to: 0.25; duration: 700 } NumberAnimation { to: 1; duration: 700 } } }
-                        Label { text: "NOW PLAYING · EMBER ACTIVE"; role: "labelL"; emphasized: true; color: Theme.good }
+                        Label { text: "NOW PLAYING · EMBER RADEON"; role: "labelL"; emphasized: true; color: Theme.good }
                     }
                     Label { text: npc.modelData.name; role: "titleL"; emphasized: true; width: parent.width; elide: Text.ElideRight }
                     Label {
